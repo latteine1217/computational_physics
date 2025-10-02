@@ -123,6 +123,7 @@ def partition_stats(energies: np.ndarray, mags: np.ndarray, beta: float):
 
 @dataclass(frozen=True)
 class MethodResult:
+    """封裝單一計算方法的觀測量摘要，方便統一後處理。"""
     method: str
     free_energy_per_spin: float
     susceptibility_per_spin: float
@@ -133,6 +134,7 @@ class MethodResult:
 
 def enumeration_observables(L: int, T: float, J: float, h: float = 0.0,
                             periodic: bool = True) -> MethodResult:
+    """以 Gray code 窮舉 2^L 組態，回傳自由能、磁化率與熱容量等量測。"""
     start = time.perf_counter()
     energies, mags, _ = ising1d_all_energies_gray(L, J, h, periodic)
     beta = 1.0 / T
@@ -262,7 +264,7 @@ def run_1d_methods(L: int, T: float, J: float = 1.0, h: float = 0.0,
 
 # ---------- 小工具：row-wise 的 logsumexp，避免 under/overflow ----------
 def logsumexp_rows(x: np.ndarray) -> np.ndarray:
-    # x: shape (M, N). 回傳 shape (M,)
+    """逐列套用 log-sum-exp，減去列最大值避免浮點溢位。"""
     m = np.max(x, axis=1, keepdims=True)
     return (m.squeeze() + np.log(np.sum(np.exp(x - m), axis=1)))
 

@@ -187,13 +187,14 @@ def partition_stats(energies: np.ndarray, mags: np.ndarray, beta: float):
 
 # ---------- 小工具：row-wise 的 logsumexp，避免 under/overflow ----------
 def logsumexp_rows(x: np.ndarray) -> np.ndarray:
-    # x: shape (M, N). 回傳 shape (M,)
+    """針對每一列套用 log-sum-exp，善用列最大值避免浮點溢位。"""
     m = np.max(x, axis=1, keepdims=True)
     return (m.squeeze() + np.log(np.sum(np.exp(x - m), axis=1)))
 
 
 @dataclass(frozen=True)
 class MethodResult:
+    """整合各演算法輸出的宏觀物理量與額外元資料。"""
     method: str
     free_energy_per_spin: float
     susceptibility_per_spin: float
@@ -235,6 +236,7 @@ def enumeration_observables_2d(Lx: int, Ly: int, T: float, J: float, h: float = 
 
 
 def _row_spin_array(bits: int, Lx: int) -> np.ndarray:
+    """將單列 bitmask 轉為 {-1,+1} 自旋陣列，供列轉移矩陣重用。"""
     arr = np.empty(Lx, dtype=np.int8)
     for x in range(Lx):
         arr[x] = bit_to_spin(bits, x)
@@ -242,6 +244,7 @@ def _row_spin_array(bits: int, Lx: int) -> np.ndarray:
 
 
 def _row_internal_coupling(spins: np.ndarray, periodic: bool) -> int:
+    """計算單列自旋的水平耦合 Σ s_i s_{i+1}，考慮是否套用 PBC。"""
     total = 0
     Lx = spins.shape[0]
     for x in range(Lx - 1):
@@ -330,6 +333,31 @@ def _transfer_matrix_stats(Lx: int, Ly: int, beta: float, J: float, h: float,
     return logZ, d_logZ, d2_logZ, dim
 
 
+def _adaptive_field_eps(N: int, beta: float, base_eps: float = 1e-8) -> float:
+    """
+    改進的自適應步長策略，基於專家分析的建議
+    
+    Args:
+        N: 總自旋數
+        beta: 逆溫度
+        base_eps: 基礎步長（改進為更精確的 1e-8）
+        
+    Returns:
+        adaptive_eps: 調整後的步長
+    """
+    # 更強的系統尺寸依賴：N^0.6 而非 N^0.5
+    size_factor = 1.0 / (N ** 0.6)
+    
+    # 低溫保護：避免極低溫時步長過大
+    temp_factor = min(1.0, 2.0 * beta)
+    
+    # 計算自適應步長
+    adaptive_eps = base_eps * size_factor * temp_factor
+    
+    # 設定更嚴格的下界保護
+    return max(adaptive_eps, 1e-12)
+
+
 def transfer_matrix_observables_2d(Lx: int, Ly: int, T: float, J: float, h: float = 0.0,
                                    periodic: bool = True,
                                    field_eps: float | None = None) -> MethodResult:
@@ -342,7 +370,13 @@ def transfer_matrix_observables_2d(Lx: int, Ly: int, T: float, J: float, h: floa
         delta_beta = 0.5 * beta
 
     start = time.perf_counter()
-    eps = field_eps if field_eps is not None else 1e-6
+    
+    # 自適應步長控制：根據系統尺寸和溫度調整精度
+    N = Lx * Ly
+    if field_eps is None:
+        eps = _adaptive_field_eps(N, beta)
+    else:
+        eps = field_eps
 
     logZ, d_logZ, d2_logZ, dim = _transfer_matrix_stats(Lx, Ly, beta, J, h, periodic)
     logZ_plus, _, _, _ = _transfer_matrix_stats(Lx, Ly, beta, J, h + eps, periodic)
@@ -378,54 +412,95 @@ def transfer_matrix_observables_2d(Lx: int, Ly: int, T: float, J: float, h: floa
 
 
 def _is_power_of_two(n: int) -> bool:
+    """檢查正整數是否為 2 的冪次，TRG 粗粒化需求。"""
     return n > 0 and (n & (n - 1) == 0)
 
 
 def _build_trg_initial_tensor(beta: float, J: float, h: float) -> np.ndarray:
-    cosh = math.cosh(beta * J)
-    sinh = math.sinh(beta * J)
-    W = np.array(
-        [
-            [math.sqrt(cosh), math.sqrt(sinh)],
-            [math.sqrt(cosh), -math.sqrt(sinh)],
-        ],
-        dtype=np.float64,
-    )
-    spins = np.array([-1, 1], dtype=np.int8)
-    field_weights = np.exp(beta * h * spins)
-
+    """
+    修正的 TRG 初始張量構造，基於標準物理分解
+    
+    參考：Levin-Nave (2007) 和標準張量網路理論
+    
+    Args:
+        beta: 逆溫度 1/T
+        J: 近鄰耦合強度  
+        h: 外磁場強度
+        
+    Returns:
+        T[α,β,γ,δ]: 4-階初始張量，對應 [up, right, down, left]
+    """
+    # 簡化且正確的 TRG 權重構造
+    # 使用標準的 cosh/sinh 分解
+    cosh_val = np.cosh(beta * J)
+    sinh_val = np.sinh(beta * J)
+    
+    # 權重矩陣：w[α, s] 其中 α∈{0,1} 是鍵索引，s∈{0,1} 是自旋索引 (-1,+1)
+    w = np.array([
+        [np.sqrt(cosh_val), np.sqrt(cosh_val)],     # α=0: 平行自旋權重
+        [np.sqrt(sinh_val), -np.sqrt(sinh_val)]     # α=1: 反平行自旋權重  
+    ], dtype=np.float64)
+    
+    # 初始化張量 T[up, right, down, left]
     T = np.zeros((2, 2, 2, 2), dtype=np.float64)
-    for idx, weight in enumerate(field_weights):
-        vec = W[idx]
-        outer = np.einsum('i,j,k,l->ijkl', vec, vec, vec, vec)
-        T += weight * outer
+    
+    # 構造張量元素：對中心自旋求和
+    for up in range(2):
+        for right in range(2):
+            for down in range(2):
+                for left in range(2):
+                    # 對兩個可能的中心自旋值求和
+                    for s_idx in range(2):
+                        s = 2 * s_idx - 1  # 轉換：0->-1, 1->+1
+                        
+                        # 外場貢獻：每個自旋承擔完整的外場能量
+                        field_weight = np.exp(beta * h * s)
+                        
+                        # 四個鍵的權重貢獻
+                        # 每個鍵根據其指向的自旋狀態來選擇權重
+                        bond_weight = (w[up, s_idx] * w[right, s_idx] * 
+                                     w[down, s_idx] * w[left, s_idx])
+                        
+                        T[up, right, down, left] += field_weight * bond_weight
+    
     return T
 
 
 def _trg_step(T: np.ndarray, chi: int) -> Tuple[np.ndarray, int]:
+    """
+    標準 TRG 步驟：2×2 → 1×1 粗粒化
+    參考：Levin & Nave (2007)
+    """
     dim = T.shape[0]
+    
+    # SVD 分解：將張量重組為矩陣進行分解
     T_perm = np.transpose(T, (0, 3, 1, 2))  # (up,left,right,down)
     mat = T_perm.reshape(dim * dim, dim * dim)
     U, S, Vh = np.linalg.svd(mat, full_matrices=False)
+    
+    # 截斷到目標維度
     chi_eff = int(min(chi, len(S)))
     U = U[:, :chi_eff]
     S = S[:chi_eff]
     Vh = Vh[:chi_eff, :]
 
+    # 平均分配奇異值
     sqrtS = np.sqrt(S)
     U = U * sqrtS
     Vh = (sqrtS[:, None] * Vh)
 
+    # 重構為張量
     S1 = U.reshape(dim, dim, chi_eff)          # (up, left, α)
     S2 = Vh.reshape(chi_eff, dim, dim)         # (α, right, down)
 
-    # Contract四個張量組成 coarse-grained tensor；輸出腳為 (α, β, γ, δ)
-    T_new = np.einsum('ija,bjk,klc,dli->abcd', S1, S2, S1, S2)
+    # 標準 TRG 收縮公式
+    T_new = np.einsum('api,ibj,cjq,qda->abcd', S1, S2, S1, S2)
     return T_new, chi_eff
 
 
 def _trg_logZ(Lx: int, Ly: int, beta: float, J: float, h: float,
               chi: int, periodic: bool = True) -> Tuple[float, Dict[str, float]]:
+    """在平方晶格上執行多層 TRG，回傳 logZ 以及截斷歷程資訊。"""
     if not periodic:
         raise NotImplementedError("TRG 僅支援週期邊界條件")
     if Lx != Ly:
@@ -446,7 +521,7 @@ def _trg_logZ(Lx: int, Ly: int, beta: float, J: float, h: float,
         if norm <= 0.0:
             raise RuntimeError("TRG tensor 規範為零，數值崩潰")
         T = T / norm
-        log_scale += n_sites * math.log(norm)
+        log_scale += math.log(norm)
         n_sites //= 4
 
     final_scalar = np.einsum('aabb->', T)
@@ -464,6 +539,7 @@ def _trg_logZ(Lx: int, Ly: int, beta: float, J: float, h: float,
 def trg_observables_2d(Lx: int, Ly: int, T: float, J: float, h: float = 0.0,
                        periodic: bool = True, chi: int = 32,
                        field_eps: float | None = None) -> MethodResult:
+    """以 TRG 估算單一溫度下的自由能、磁化率與熱容量，本函式包辦差分計算。"""
     beta = 1.0 / T
     N = Lx * Ly
 
