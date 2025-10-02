@@ -14,29 +14,24 @@
 ### Hamiltonian 與配分函數
 Ising model 的作用量為
 
-\[
-\mathcal{H}(\{\sigma_i\}) = -J \sum_{\langle i,j \rangle} \sigma_i \sigma_j - h \sum_i \sigma_i,\qquad \sigma_i \in \{-1,+1\}
-\]
+
+$$ \mathcal{H}(\{\sigma_i\}) = -J \sum_{\langle i,j \rangle} \sigma_i \sigma_j - h \sum_i \sigma_i,\qquad \sigma_i \in \{-1,+1\} $$
 
 其中 $J$ 為耦合常數、$h$ 為外場、和號遍歷最近鄰。溫度 $T$ 下的配分函數與主要觀察量定義為
 
-\[
-Z = \sum_{\{\sigma_i\}} e^{-\beta \mathcal{H}},\quad F = -\frac{1}{\beta} \ln Z,\quad M = \langle \sum_i \sigma_i \rangle,
-\]
+$$ Z = \sum_{\{\sigma_i\}} e^{-\beta \mathcal{H}},\quad F = -\frac{1}{\beta} \ln Z,\quad M = \langle \sum_i \sigma_i \rangle, $$
 
-\[
-\chi = \frac{\beta}{N}\big( \langle M^2 \rangle - \langle M \rangle^2 \big),\quad C_v = \frac{\beta^2}{N}\big( \langle E^2 \rangle - \langle E \rangle^2 \big),\quad N=L\text{ for 1D}.
-\]
+$$ \chi = \frac{\beta}{N}\big( \langle M^2 \rangle - \langle M \rangle^2 \big),\quad C_v = \frac{\beta^2}{N}\big( \langle E^2 \rangle - \langle E \rangle^2 \big),\quad N=L\text{ for 1D}.$$
 
 ### 一維解析解
 對於週期邊界條件且無外場 ($h=0$) 的一維系統，轉移矩陣為
 
-\[
+$$
 T = \begin{pmatrix}
 e^{\beta J} & e^{-\beta J} \\
 e^{-\beta J} & e^{\beta J}
 \end{pmatrix},
-\]
+$$
 
 其特徵值 $\lambda_\pm = e^{\beta J} \pm e^{-\beta J}$，因此配分函數為 $Z = \lambda_+^L + \lambda_-^L$，自由能可直接由 $F = -\beta^{-1} \ln Z$ 得到。當 $h \neq 0$ 時仍可使用 2×2 轉移矩陣，但需數值求解並以有限差分取得磁化率。
 
@@ -127,17 +122,6 @@ e^{-\beta J} & e^{\beta J}
    ```
    - 圖像一次呈現自由能、運算時間、磁化率與熱容量四項比較。
    - TRG 目前僅支援正方形且邊長為 $2^n$；若超出條件會拋出例外。
-
----
-
-- 本專案提供 `unittest` 測試：
-  - `test_1d_model.py`：確認 1D 枚舉與轉移矩陣在自由能、磁化率上的一致。
-  - `test_2d_model.py`：驗證 2D 枚舉 vs. 轉移矩陣，以及 TRG 的數值精度。
-- 執行方式：
-  ```bash
-  python3 -m unittest
-  ```
-  若環境尚未安裝 `numpy` 請先安裝。
 
 ---
 

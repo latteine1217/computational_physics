@@ -42,3 +42,7 @@ Thumbs.db
 *.npy
 *.npz
 *.mat
+
+# AI Notebook
+tasks/
+context/

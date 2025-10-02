@@ -3,6 +3,7 @@ from typing import Tuple, Dict
 import matplotlib.pyplot as plt
 import time
 import math
+import warnings
 from dataclasses import dataclass, field
 
 # -------------------------
@@ -278,6 +279,9 @@ def _build_transfer_matrices(Lx: int, beta: float, J: float, h: float,
     d2T = np.empty((dim, dim), dtype=np.float64)
     half_beta = 0.5 * beta
 
+    max_exponent = -math.inf
+
+    # 先儲存指數與導數 pref，以便後續一次性平移；避免直接取指數造成溢位
     for a in range(dim):
         spins_a = row_spins[a]
         spin_sum_a = row_spin_sum[a]
@@ -292,14 +296,21 @@ def _build_transfer_matrices(Lx: int, beta: float, J: float, h: float,
                 + J * vertical
                 + 0.5 * h * (spin_sum_a + spin_sum_b)
             )
-            weight = math.exp(exponent)
-            T[a, b] = weight
+            if exponent > max_exponent:
+                max_exponent = exponent
+            T[a, b] = exponent
             sum_field = spin_sum_a + spin_sum_b
             pref = half_beta * sum_field
-            dT[a, b] = pref * weight
-            d2T[a, b] = (pref ** 2) * weight
+            dT[a, b] = pref
+            d2T[a, b] = pref * pref
 
-    return T, dT, d2T
+    # 以最大指數作平移，確保矩陣元素維持在數值穩定範圍
+    np.subtract(T, max_exponent, out=T)
+    np.exp(T, out=T)
+    np.multiply(dT, T, out=dT)
+    np.multiply(d2T, T, out=d2T)
+
+    return T, dT, d2T, max_exponent
 
 
 def _transfer_matrix_stats(Lx: int, Ly: int, beta: float, J: float, h: float,
@@ -308,7 +319,7 @@ def _transfer_matrix_stats(Lx: int, Ly: int, beta: float, J: float, h: float,
     if not periodic:
         raise NotImplementedError("2D transfer matrix 目前僅支援週期邊界條件")
 
-    T, dT, d2T = _build_transfer_matrices(Lx, beta, J, h, periodic)
+    T, dT, d2T, log_scale = _build_transfer_matrices(Lx, beta, J, h, periodic)
     dim = T.shape[0]
     identity = np.eye(dim, dtype=np.float64)
     prefix = [identity]
@@ -327,7 +338,7 @@ def _transfer_matrix_stats(Lx: int, Ly: int, beta: float, J: float, h: float,
             sum_term += float(np.trace((dT @ prefix[k]) @ dT @ prefix[Ly - 2 - k]))
     d2Z = Ly * float(np.trace(d2T @ T_power_minus1)) + Ly * sum_term
 
-    logZ = math.log(Z)
+    logZ = math.log(Z) + Ly * log_scale
     d_logZ = dZ / Z
     d2_logZ = d2Z / Z - (dZ / Z) ** 2
     return logZ, d_logZ, d2_logZ, dim
@@ -370,32 +381,23 @@ def transfer_matrix_observables_2d(Lx: int, Ly: int, T: float, J: float, h: floa
         delta_beta = 0.5 * beta
 
     start = time.perf_counter()
-    
-    # 自適應步長控制：根據系統尺寸和溫度調整精度
-    N = Lx * Ly
-    if field_eps is None:
-        eps = _adaptive_field_eps(N, beta)
-    else:
-        eps = field_eps
 
+    N = Lx * Ly
     logZ, d_logZ, d2_logZ, dim = _transfer_matrix_stats(Lx, Ly, beta, J, h, periodic)
-    logZ_plus, _, _, _ = _transfer_matrix_stats(Lx, Ly, beta, J, h + eps, periodic)
-    logZ_minus, _, _, _ = _transfer_matrix_stats(Lx, Ly, beta, J, h - eps, periodic)
     logZ_beta_plus, _, _, _ = _transfer_matrix_stats(Lx, Ly, beta + delta_beta, J, h, periodic)
     logZ_beta_minus, _, _, _ = _transfer_matrix_stats(Lx, Ly, beta - delta_beta, J, h, periodic)
     runtime = time.perf_counter() - start
 
-    N = Lx * Ly
     free_energy_per_spin = -(logZ / beta) / N
-    magnetization_per_spin = (logZ_plus - logZ_minus) / (2.0 * eps * beta * N)
-    susceptibility_per_spin = (logZ_plus - 2.0 * logZ + logZ_minus) / (eps ** 2 * beta * N)
+    magnetization_per_spin = d_logZ / (beta * N)
+    susceptibility_per_spin = d2_logZ / (beta * N)
     d2_logZ_dbeta2 = (logZ_beta_plus - 2.0 * logZ + logZ_beta_minus) / (delta_beta ** 2)
     heat_capacity_per_spin = (beta**2 * d2_logZ_dbeta2) / N
 
     metadata = {
         "log_partition_function": logZ,
         "magnetization_per_spin": magnetization_per_spin,
-        "finite_difference_eps": eps,
+        "derivative_mode": "analytic",
         "heat_capacity_per_spin": heat_capacity_per_spin,
         "row_dimension": float(dim),
         "total_spins": float(N),
@@ -414,6 +416,15 @@ def transfer_matrix_observables_2d(Lx: int, Ly: int, T: float, J: float, h: floa
 def _is_power_of_two(n: int) -> bool:
     """檢查正整數是否為 2 的冪次，TRG 粗粒化需求。"""
     return n > 0 and (n & (n - 1) == 0)
+
+
+def _trg_supports_lattice(Lx: int, Ly: int, periodic: bool) -> bool:
+    """TRG 需要正方形且邊長為 2 的冪次，並假設週期邊界。"""
+    if not periodic:
+        return False
+    if Lx != Ly:
+        return False
+    return _is_power_of_two(Lx) and _is_power_of_two(Ly)
 
 
 def _build_trg_initial_tensor(beta: float, J: float, h: float) -> np.ndarray:
@@ -603,6 +614,12 @@ def run_2d_methods(Lx: int, Ly: int, T: float, J: float = 1.0, h: float = 0.0,
                 Lx, Ly, T, J, h, periodic, field_eps=transfer_matrix_eps
             )
         elif method == "trg":
+            if not _trg_supports_lattice(Lx, Ly, periodic):
+                warnings.warn(
+                    f"TRG 僅支援週期邊界的正方形且邊長為 2 的冪次，本次 Lx={Lx}, Ly={Ly} 已自動跳過。",
+                    RuntimeWarning,
+                )
+                continue
             results[method] = trg_observables_2d(
                 Lx, Ly, T, J, h, periodic,
                 chi=int(trg_kwargs.get("chi", 32)),
@@ -699,8 +716,8 @@ def plot_free_energy_vs_T_for_Ls(Lx_list,
                                  J: float = 1.0,
                                  h: float = 0.0,
                                  periodic: bool = True,
-                                 T_min: float = 0.05,
-                                 T_max: float = 5.0,
+                                 T_min: float = 0.1,
+                                 T_max: float = 3.0,
                                  nT: int = 200,
                                  per_spin: bool = True,
                                  methods: Tuple[str, ...] = ("enumeration",),
@@ -743,6 +760,12 @@ def plot_free_energy_vs_T_for_Ls(Lx_list,
             elif method == "transfer_matrix":
                 F_total, chi_arr, cv_arr, elapsed = _transfer_matrix_curve_stats(Lx, Ly, T_vals, J, h, periodic)
             elif method == "trg":
+                if not _trg_supports_lattice(Lx, Ly, periodic):
+                    warnings.warn(
+                        f"TRG 僅支援週期邊界的正方形且邊長為 2 的冪次，本次 Lx={Lx}, Ly={Ly} 已自動跳過。",
+                        RuntimeWarning,
+                    )
+                    continue
                 chi_val = int(trg_kwargs.get("chi", 32))
                 field_eps = trg_kwargs.get("field_eps")
                 F_total, chi_arr, cv_arr, elapsed = _trg_curve_stats(Lx, Ly, T_vals, J, h, periodic,
@@ -827,13 +850,13 @@ if __name__ == "__main__":
     print(f"Z={Z:.6e}, <E>={Emean:.6f}, <M>={Mmean:.6f}, <M^2>={M2mean:.6f}, C_v={Cv:.6f}")
 
     plot_free_energy_vs_T_for_Ls(
-        Lx_list=[2, 4],
-        Ly_list=[2, 4],
+        Lx_list=[2, 3, 4],
+        Ly_list=[2, 3, 4],
         J=J,
         h=0.0,
         periodic=periodic,
-        T_min=0.5,
-        T_max=3.5,
+        T_min=0.1,
+        T_max=3.0,
         nT=120,
         per_spin=True,
         methods=("enumeration", "transfer_matrix", "trg"),

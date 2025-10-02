@@ -306,6 +306,238 @@ def free_energy_1d(L: int, T: np.ndarray, J: float, h: float = 0.0,
     else:
         raise ValueError("method 必須是 {'auto','theory','enum'} 之一。")
 
+# ---------- 熱容量計算：Cv = -T ∂²F/∂T² ----------
+def calculate_cv_from_free_energy(L: int, T: np.ndarray, J: float, h: float = 0.0,
+                                  periodic: bool = True, method: str = "auto",
+                                  delta_T_factor: float = 1e-4) -> np.ndarray:
+    """
+    使用數值微分計算熱容量 Cv = -T ∂²F/∂T²（回傳每自旋的熱容量值）
+    
+    參數：
+    - method: 計算方法 {"auto", "theory", "enum", "enumeration", "transfer_matrix"}
+    - delta_T_factor: 微分步長因子，實際步長 = delta_T_factor * T
+    """
+    T = np.asarray(T, dtype=np.float64)
+    Cv = np.empty_like(T)
+    
+    # 標準化方法名稱
+    if method == "enumeration":
+        method = "enum"
+    
+    for i, temp in enumerate(T):
+        delta_T = delta_T_factor * temp
+        
+        # 確保溫度為正
+        T_plus = temp + delta_T
+        T_minus = max(temp - delta_T, 0.01)  # 避免負溫度
+        
+        # 根據方法選擇合適的函數計算自由能
+        if method == "transfer_matrix":
+            # 使用轉移矩陣方法
+            F_center = transfer_matrix_observables(L, temp, J, h, periodic).free_energy_per_spin * L
+            F_plus = transfer_matrix_observables(L, T_plus, J, h, periodic).free_energy_per_spin * L
+            F_minus = transfer_matrix_observables(L, T_minus, J, h, periodic).free_energy_per_spin * L
+        else:
+            # 使用 free_energy_1d 函數 (支援 auto, theory, enum)
+            F_center = free_energy_1d(L, np.array([temp]), J, h, periodic, method)[0]
+            F_plus = free_energy_1d(L, np.array([T_plus]), J, h, periodic, method)[0]
+            F_minus = free_energy_1d(L, np.array([T_minus]), J, h, periodic, method)[0]
+        
+        # 數值二階微分：∂²F/∂T² ≈ (F(T+δT) - 2F(T) + F(T-δT)) / δT²
+        if temp == T_minus + delta_T:  # 對稱差分
+            d2F_dT2 = (F_plus - 2.0 * F_center + F_minus) / (delta_T ** 2)
+        else:  # 前向差分（當T接近0時）
+            actual_delta = T_plus - temp
+            d2F_dT2 = (F_plus - 2.0 * F_center + F_minus) / (actual_delta ** 2)
+        
+        # Cv = -T ∂²F/∂T²，轉換為每個自旋的熱容量
+        Cv[i] = -temp * d2F_dT2 / L
+    
+    return Cv
+
+def calculate_cv_multiple_methods(L: int, T: np.ndarray, J: float, h: float = 0.0,
+                                  periodic: bool = True, 
+                                  methods: tuple[str, ...] = ("enumeration", "transfer_matrix")) -> Dict[str, np.ndarray]:
+    """
+    使用多種方法計算熱容量曲線
+    """
+    # 過濾方法（h≠0時排除theory）
+    filtered_methods = []
+    for method in methods:
+        if method == "theory" and not math.isclose(h, 0.0, rel_tol=1e-12, abs_tol=1e-12):
+            continue
+        filtered_methods.append(method)
+    
+    cv_results = {}
+    for method in filtered_methods:
+        cv_results[method] = calculate_cv_from_free_energy(L, T, J, h, periodic, method)
+    
+    return cv_results
+
+def plot_heat_capacity_vs_T_for_Ls(L_list, J=1.0, h=0.0, periodic=True,
+                                    T_min=0.1, T_max=5.0, nT=200,
+                                    per_spin=True,
+                                    methods: tuple[str, ...] = ("enumeration", "transfer_matrix", "theory")):
+    """
+    繪製多個系統尺寸 L 的熱容量 Cv vs 溫度 T 曲線
+    使用公式 Cv = -T ∂²F/∂T² 計算
+    
+    參數：
+    - per_spin: True 則畫 Cv/N，False 則畫總熱容量
+    """
+    # 過濾方法
+    filtered_methods = []
+    for method in methods:
+        if method == "theory" and not math.isclose(h, 0.0, rel_tol=1e-12, abs_tol=1e-12):
+            continue
+        filtered_methods.append(method)
+    
+    if len(filtered_methods) == 0:
+        raise ValueError("methods 至少需包含一種演算法")
+    
+    methods = tuple(filtered_methods)
+    T = np.linspace(T_min, T_max, nT, dtype=np.float64)
+    
+    plt.figure(figsize=(12, 8))
+    
+    # 顏色和線型設置
+    color_cycle = cycle(plt.rcParams["axes.prop_cycle"].by_key()["color"])
+    color_for_L = {}
+    linestyles = {
+        "enumeration": "-",
+        "transfer_matrix": "--", 
+        "theory": ":",
+    }
+    
+    runtime_data = {m: [] for m in methods}
+    
+    for L in L_list:
+        if L not in color_for_L:
+            color_for_L[L] = next(color_cycle)
+        color = color_for_L[L]
+        
+        for method in methods:
+            print(f"正在計算 L={L}, method={method} 的熱容量...")
+            start = time.perf_counter()
+
+            # 計算熱容量（回傳每自旋值）
+            Cv_per_spin = calculate_cv_from_free_energy(L, T, J, h, periodic, method)
+
+            elapsed = time.perf_counter() - start
+            runtime_data[method].append(elapsed)
+
+            # 依需求選擇繪圖數據
+            y = Cv_per_spin if per_spin else Cv_per_spin * L
+            
+            # 設置標籤和線型
+            if len(methods) > 1:
+                label = f"{method} L={L}"
+            else:
+                label = f"L={L}"
+            
+            linestyle = linestyles.get(method, "-")
+            plt.plot(T, y, label=label, color=color, linestyle=linestyle, linewidth=1.5)
+    
+    # 圖表設置
+    ylabel = "Heat capacity per spin Cv/N" if per_spin else "Heat capacity Cv"
+    plt.xlabel("Temperature T")
+    plt.ylabel(ylabel)
+    plt.title(f"1D Ising Heat Capacity: Cv = -T ∂²F/∂T² (J={J}, h={h})")
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    # 繪製計算時間對比圖
+    plt.figure(figsize=(10, 6))
+    for method, timings in runtime_data.items():
+        plt.plot(L_list, timings, marker="o", label=f"{method} Cv calculation", linewidth=2, markersize=6)
+    
+    plt.xlabel("System size L")
+    plt.ylabel("Computation time (s)")
+    plt.title(f"Heat Capacity Calculation Time vs L (J={J}, h={h})")
+    plt.yscale("log")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+def plot_comparison_F_and_Cv(L_list, J=1.0, h=0.0, periodic=True,
+                             T_min=0.1, T_max=5.0, nT=200,
+                             methods: tuple[str, ...] = ("enumeration", "transfer_matrix", "theory")):
+    """
+    同時比較自由能和熱容量的溫度依賴性
+    """
+    # 過濾方法
+    filtered_methods = []
+    for method in methods:
+        if method == "theory" and not math.isclose(h, 0.0, rel_tol=1e-12, abs_tol=1e-12):
+            continue
+        filtered_methods.append(method)
+    
+    if len(filtered_methods) == 0:
+        raise ValueError("methods 至少需包含一種演算法")
+    
+    methods = tuple(filtered_methods)
+    T = np.linspace(T_min, T_max, nT, dtype=np.float64)
+    
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+    
+    # 顏色設置
+    color_cycle = cycle(plt.rcParams["axes.prop_cycle"].by_key()["color"])
+    color_for_L = {}
+    linestyles = {
+        "enumeration": "-",
+        "transfer_matrix": "--",
+        "theory": ":",
+    }
+    
+    method_funcs = {
+        "enumeration": _free_energy_curve_enumeration,
+        "transfer_matrix": _free_energy_curve_transfer_matrix,
+        "theory": lambda L, T_vals, J_val, h_val, periodic_val: free_energy_1d(
+            L, T_vals, J_val, h_val, periodic_val, method="theory"
+        ),
+    }
+    
+    for L in L_list:
+        if L not in color_for_L:
+            color_for_L[L] = next(color_cycle)
+        color = color_for_L[L]
+        
+        for method in methods:
+            # 計算自由能
+            F_total = method_funcs[method](L, T, J, h, periodic)
+            F_per_spin = F_total / L
+            
+            # 計算熱容量（回傳每自旋值）
+            Cv_per_spin = calculate_cv_from_free_energy(L, T, J, h, periodic, method)
+            
+            # 設置標籤
+            label = f"{method} L={L}" if len(methods) > 1 else f"L={L}"
+            linestyle = linestyles.get(method, "-")
+            
+            # 繪製自由能
+            ax1.plot(T, F_per_spin, label=label, color=color, linestyle=linestyle, linewidth=1.5)
+            
+            # 繪製熱容量（固定顯示每自旋）
+            ax2.plot(T, Cv_per_spin, label=label, color=color, linestyle=linestyle, linewidth=1.5)
+    
+    # 自由能圖設置
+    ax1.set_ylabel("Free energy per spin F/N")
+    ax1.set_title(f"1D Ising Model: Free Energy (J={J}, h={h})")
+    ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax1.grid(True, alpha=0.3)
+    
+    # 熱容量圖設置  
+    ax2.set_xlabel("Temperature T")
+    ax2.set_ylabel("Heat capacity per spin Cv/N")
+    ax2.set_title(f"Heat Capacity: Cv = -T ∂²F/∂T² (J={J}, h={h})")
+    ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax2.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
+
 # ---------- 畫圖：多個 L、同一張圖 ----------
 def _free_energy_curve_enumeration(L: int, T: np.ndarray, J: float, h: float,
                                    periodic: bool) -> np.ndarray:
@@ -413,6 +645,7 @@ if __name__ == "__main__":
     T = 2.5
     periodic = True
 
+    # 基本方法比較
     results = run_1d_methods(L, T, J=J, h=h, periodic=periodic)
     for name, res in results.items():
         print(f"[{name}] F/N = {res.free_energy_per_spin:.8f}, ")
@@ -420,8 +653,28 @@ if __name__ == "__main__":
         for key, value in res.metadata.items():
             print(f"        {key}: {value}")
 
-    L_list = [2, 3, 4, 5, 10, 15, 20]
+    print("\n" + "="*50)
+    print("繪製自由能比較圖...")
+    L_list = [2, 3, 4, 5, 8, 10, 15, 20]
     plot_free_energy_vs_T_for_Ls(L_list, J=J, h=h, periodic=periodic,
                                  T_min=0.1, T_max=3.0, nT=100,
                                  per_spin=True,
                                  methods=("enumeration", "transfer_matrix", "theory"))
+    
+    print("\n" + "="*50)
+    print("繪製熱容量比較圖...")
+    print("注意：熱容量計算使用數值微分，可能需要較長時間...")
+    
+    # 為了演示，使用較小的L值和較粗的溫度網格
+    L_list_cv = [2, 3, 4, 5, 8, 10, 15]
+    plot_heat_capacity_vs_T_for_Ls(L_list_cv, J=J, h=h, periodic=periodic,
+                                   T_min=0.1, T_max=3.0, nT=80,
+                                   per_spin=True,
+                                   methods=("enumeration", "transfer_matrix", "theory"))
+    
+    print("\n" + "="*50)
+    print("繪製自由能與熱容量對比圖...")
+    L_list_comparison = [2, 4, 5, 8, 10, 15]
+    plot_comparison_F_and_Cv(L_list_comparison, J=J, h=h, periodic=periodic,
+                             T_min=0.1, T_max=3.0, nT=60,
+                             methods=("enumeration", "transfer_matrix", "theory"))
