@@ -117,10 +117,12 @@ $$
                         trg_kwargs={"chi": 32})
 
    plot_free_energy_vs_T_for_Ls(Lx_list=[2, 4], Ly_list=[2, 4],
-                                J=1.0, h=0.0, methods=("enumeration", "transfer_matrix", "trg"),
+                                J=1.0, h=0.0,
+                                methods=("enumeration", "transfer_matrix", "tensor_network_2x2", "trg"),
                                 trg_kwargs={"chi": 32})
    ```
    - 圖像一次呈現自由能、運算時間、磁化率與熱容量四項比較。
+   - `tensor_network_2x2` 僅支援 $2\times 2$ 且具有週期邊界的晶格，其結果會自動整合至曲線與耗時比較圖。
    - TRG 目前僅支援正方形且邊長為 $2^n$；若超出條件會拋出例外。
 
 ---

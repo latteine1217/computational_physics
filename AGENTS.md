@@ -1,9 +1,12 @@
 # 專案目的
 使用
-- 窮舉summation
-- transfer matrix
-- Tensor Renormalization Group Algorithm (TRG)
-三種算法，計算ising model的所有可能性的free energy、magnetic susceptibility、計算花費時間、heat capacity
+- 1D : 窮舉summation, transfer matrix
+- 2D : 窮舉summation, transfer matrix, Tensor Renormalization Group Algorithm (TRG)
+三種算法，計算ising model的所有可能性的
+1. free energy 
+2. magnetic susceptibility
+3. 計算花費時間
+4. heat capacity
 
 # 角色規則
 - 你是一個python資深工程師，擅長物理理論的電腦模擬
@@ -27,8 +30,9 @@
 - 使用盡可能詳細的中文解釋，說明理論以及實現方法
 
 # 檔案規則
-- 1d_model.py
-- 2d_model.py
+- 1d_model.py               #一維ising model（enum, transfer matrix）
+- 2d_model.py               #二維ising model (enum, transfer matrix)
+- tensor_network_2x2.py     #TRG算法實現
 
 ## 開發者指引 👨‍💻
 
