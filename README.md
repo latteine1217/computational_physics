@@ -67,12 +67,17 @@ $$
 ## 檔案結構
 
 ```
-├── 1d_model.py        # 1D Ising 模型：枚舉、轉移矩陣、繪圖與範例
-├── 2d_model.py        # 2D Ising：枚舉、轉移矩陣、TRG、繪圖與範例
-├── test_1d_model.py   # 1D 測試：枚舉 vs. 轉移矩陣
-├── test_2d_model.py   # 2D 測試：枚舉 vs. 轉移矩陣／TRG
-├── README.md          # 理論與使用說明
-└── AGENTS.md          # 專案操作規範
+├── 1d_model.py                # 1D Ising：枚舉、轉移矩陣、理論解與繪圖
+├── 2d_model.py                # 2D Ising：枚舉、列轉移矩陣、TRG 與繪圖
+├── tensor_network_2x2.py      # 2×2 張量網路收縮與觀測量計算
+├── 1D_MODEL_DETAILED_ANALYSIS.md
+├── 2D_MODEL_DETAILED_ANALYSIS.md
+├── tensor_method.md
+├── TECH_REPORT.md
+├── task-01.md
+├── README.md
+├── AGENTS.md
+└── __pycache__/
 ```
 
 ---
