@@ -5,7 +5,6 @@ import time
 import math
 import warnings
 from dataclasses import dataclass, field
-from tensor_network_2x2 import tensor_network_2x2_observables as _tn2x2_observables
 
 # -------------------------
 # 基本工具：bit <-> spin
@@ -603,11 +602,9 @@ def run_2d_methods(Lx: int, Ly: int, T: float, J: float = 1.0, h: float = 0.0,
                    periodic: bool = True,
                    methods: Tuple[str, ...] = ("enumeration", "transfer_matrix", "trg"),
                    transfer_matrix_eps: float | None = None,
-                   tensor_kwargs: Dict[str, float] | None = None,
                    trg_kwargs: Dict[str, float] | None = None) -> Dict[str, MethodResult]:
     """依序執行指定 2D 方法，回傳各自的觀測結果。"""
     results: Dict[str, MethodResult] = {}
-    tensor_kwargs = {} if tensor_kwargs is None else dict(tensor_kwargs)
     trg_kwargs = {} if trg_kwargs is None else dict(trg_kwargs)
     for method in methods:
         if method == "enumeration":
@@ -615,21 +612,6 @@ def run_2d_methods(Lx: int, Ly: int, T: float, J: float = 1.0, h: float = 0.0,
         elif method == "transfer_matrix":
             results[method] = transfer_matrix_observables_2d(
                 Lx, Ly, T, J, h, periodic, field_eps=transfer_matrix_eps
-            )
-        elif method == "tensor_network_2x2":
-            free_energy, susceptibility, heat_capacity, runtime, metadata = _tn2x2_observables(
-                Lx, Ly, T, J, h,
-                periodic=periodic,
-                beta_eps=tensor_kwargs.get("beta_eps"),
-                field_eps=tensor_kwargs.get("field_eps"),
-            )
-            results[method] = MethodResult(
-                method="tensor_network_2x2",
-                free_energy_per_spin=free_energy,
-                susceptibility_per_spin=susceptibility,
-                heat_capacity_per_spin=heat_capacity,
-                runtime=runtime,
-                metadata=metadata,
             )
         elif method == "trg":
             if not _trg_supports_lattice(Lx, Ly, periodic):
@@ -710,37 +692,6 @@ def _transfer_matrix_curve_stats(Lx: int, Ly: int, T_vals: np.ndarray, J: float,
     return np.atleast_1d(F_total), np.atleast_1d(chi_arr), np.atleast_1d(cv_arr), runtime
 
 
-def _tensor_network_2x2_curve_stats(Lx: int, Ly: int, T_vals: np.ndarray, J: float, h: float,
-                                    periodic: bool,
-                                    tensor_kwargs: Dict[str, float] | None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
-    """回傳 2x2 張量網路方法在多個溫度點的自由能、磁化率、熱容量與耗時。"""
-    if (Lx, Ly) != (2, 2):
-        raise ValueError("tensor_network_2x2 方法僅支援 2x2 晶格")
-    if not periodic:
-        raise ValueError("tensor_network_2x2 方法僅支援週期邊界條件")
-    N = Lx * Ly
-    T_vals = np.asarray(T_vals, dtype=np.float64)
-    F_total = np.empty_like(T_vals)
-    chi_arr = np.empty_like(T_vals)
-    cv_arr = np.empty_like(T_vals)
-    runtime = 0.0
-    tensor_kwargs = {} if tensor_kwargs is None else dict(tensor_kwargs)
-    beta_eps = tensor_kwargs.get("beta_eps")
-    field_eps = tensor_kwargs.get("field_eps")
-    for idx, temp in enumerate(T_vals):
-        free_energy, susceptibility, heat_capacity, single_time, _ = _tn2x2_observables(
-            Lx, Ly, float(temp), J, h,
-            periodic=periodic,
-            beta_eps=beta_eps,
-            field_eps=field_eps,
-        )
-        F_total[idx] = free_energy * N
-        chi_arr[idx] = susceptibility
-        cv_arr[idx] = heat_capacity
-        runtime += single_time
-    return np.atleast_1d(F_total), np.atleast_1d(chi_arr), np.atleast_1d(cv_arr), runtime
-
-
 def _trg_curve_stats(Lx: int, Ly: int, T_vals: np.ndarray, J: float, h: float,
                      periodic: bool, chi: int, field_eps: float | None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
     """回傳 TRG 法在多個溫度下的自由能、磁化率、熱容量與耗時。"""
@@ -770,7 +721,6 @@ def plot_free_energy_vs_T_for_Ls(Lx_list,
                                  nT: int = 200,
                                  per_spin: bool = True,
                                  methods: Tuple[str, ...] = ("enumeration",),
-                                 tensor_kwargs: Dict[str, float] | None = None,
                                  trg_kwargs: Dict[str, float] | None = None):
     """繪製 2D Ising 自由能、耗時、磁化率與熱容量（單一圖含四子圖）。"""
     if Lx_list is None or Ly_list is None:
@@ -778,7 +728,6 @@ def plot_free_energy_vs_T_for_Ls(Lx_list,
     if len(Lx_list) != len(Ly_list):
         raise ValueError("Lx_list 與 Ly_list 長度需一致")
 
-    tensor_kwargs = {} if tensor_kwargs is None else dict(tensor_kwargs)
     trg_kwargs = {} if trg_kwargs is None else dict(trg_kwargs)
     T_vals = np.linspace(T_min, T_max, nT, dtype=np.float64)
     if np.any(T_vals <= 0):
@@ -788,13 +737,11 @@ def plot_free_energy_vs_T_for_Ls(Lx_list,
     linestyles = {
         "enumeration": "-",
         "transfer_matrix": "--",
-        "tensor_network_2x2": "-.",
         "trg": ":",
     }
     label_alias = {
         "enumeration": "enum",
         "transfer_matrix": "tm",
-        "tensor_network_2x2": "tn2",
         "trg": "trg",
     }
 
@@ -812,12 +759,6 @@ def plot_free_energy_vs_T_for_Ls(Lx_list,
                 F_total, chi_arr, cv_arr, elapsed = _enumeration_curve_stats(Lx, Ly, T_vals, J, h, periodic)
             elif method == "transfer_matrix":
                 F_total, chi_arr, cv_arr, elapsed = _transfer_matrix_curve_stats(Lx, Ly, T_vals, J, h, periodic)
-            elif method == "tensor_network_2x2":
-                if (Lx, Ly) != (2, 2) or not periodic:
-                    continue
-                F_total, chi_arr, cv_arr, elapsed = _tensor_network_2x2_curve_stats(
-                    Lx, Ly, T_vals, J, h, periodic, tensor_kwargs
-                )
             elif method == "trg":
                 if not _trg_supports_lattice(Lx, Ly, periodic):
                     warnings.warn(
@@ -893,7 +834,7 @@ if __name__ == "__main__":
     print("=== 2D Ising observables (small lattice) ===")
     results = run_2d_methods(
         Lx, Ly, T, J=J, h=h, periodic=periodic,
-        methods=("enumeration", "transfer_matrix", "tensor_network_2x2"),
+        methods=("enumeration", "transfer_matrix"),
         trg_kwargs={"chi": 32}
     )
     for name, res in results.items():
@@ -918,6 +859,6 @@ if __name__ == "__main__":
         T_max=3.0,
         nT=120,
         per_spin=True,
-        methods=("enumeration", "transfer_matrix", "tensor_network_2x2"),
+        methods=("enumeration", "transfer_matrix"),
         trg_kwargs={"chi": 32},
     )

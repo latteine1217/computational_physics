@@ -30,6 +30,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
+# 視覺化 TRG 的收縮拓撲（僅示意，不參與數值計算）
 def visualize_trg_topology():
     """
     以 ASCII Art 視覺化 TRG 的張量收縮拓撲結構。
@@ -72,6 +73,7 @@ def visualize_trg_topology():
     print(diagram)
 
 
+# 單鍵權重分解：與課程版 trg.py 一致的 M 矩陣構造
 def _ising_bond_decomposition(beta: float, J: float) -> tuple[np.ndarray, np.ndarray]:
     """
     計算二維 Ising 模型單鍵的 Boltzmann 權重矩陣 W，並透過 SVD 和特徵分解
@@ -88,32 +90,24 @@ def _ising_bond_decomposition(beta: float, J: float) -> tuple[np.ndarray, np.nda
         W: 2x2 的權重矩陣。
         M: 2x2 的分解矩陣，用於構建局域張量。
     """
+    # 與課程版 trg.py 對齊：使用 cosh/sinh 的解析分解
+    # 注意：課程版等價於 J=1 的寫法，這裡保留 J 以符合呼叫介面
+    weight = beta * J
+    M = np.array(
+        [
+            [np.sqrt(np.cosh(weight)), np.sqrt(np.sinh(weight))],
+            [np.sqrt(np.cosh(weight)), -np.sqrt(np.sinh(weight))],
+        ],
+        dtype=np.float64,
+    )
+
+    # 對應的權重矩陣 W（保留回傳以維持原介面）
     spins = np.array([1.0, -1.0], dtype=np.float64)
-    # W_{s_i, s_j} = exp(beta * J * s_i * s_j)
-    W = np.exp(beta * J * np.outer(spins, spins))
-
-    # 透過 SVD 獲取參考的正交基底，確保分解的數值穩定性
-    U_svd, singular_vals, Vh_svd = np.linalg.svd(W, full_matrices=False)
-
-    # 對稱矩陣的特徵分解：W = V * diag(lambda) * V^T
-    eigvals, eigvecs = np.linalg.eigh(W)
-
-    # 確保特徵值按降序排列 (eigh 預設是升序)
-    order = np.argsort(eigvals)[::-1]
-    eigvals = eigvals[order]
-    eigvecs = eigvecs[:, order]
-
-    # 調整特徵向量的相位，使其與 SVD 的左奇異向量一致，避免符號模糊
-    for col in range(eigvecs.shape[1]):
-        if np.dot(eigvecs[:, col], U_svd[:, col]) < 0.0:
-            eigvecs[:, col] *= -1.0
-
-    # 計算 M = V * sqrt(lambda)。這樣 M M^T = V * lambda * V^T = W
-    sqrt_vals = np.sqrt(np.clip(eigvals, 0.0, None))
-    M = eigvecs * sqrt_vals
+    W = np.exp(weight * np.outer(spins, spins))
     return W, M
 
 
+# 構建 2D Ising 的初始 rank-4 張量
 def _tensor_network_local_tensor(beta: float, J: float, h: float) -> np.ndarray:
     """
     依照 TRG 算法的標準構建方式，創建二維 Ising 模型的初始 rank-4 局域張量 T。
@@ -153,6 +147,7 @@ def _tensor_network_local_tensor(beta: float, J: float, h: float) -> np.ndarray:
     return tensor
 
 
+# TRG 單步：SVD 分解 + 截斷 + 收縮形成新張量
 def _trg_step(
     tensor: np.ndarray, chi: int | None, rel_svd_cutoff: float = 0.0
 ) -> tuple[np.ndarray, int, np.ndarray]:
@@ -176,10 +171,9 @@ def _trg_step(
     """
     dim = tensor.shape[0]  # 當前張量的維度
 
-    # --- Decomposition 1: 切分 (Up, Left) - (Right, Down) ---
-    # 將張量變形為矩陣 M1，行指標為 (u, l)，列指標為 (r, d)
-    t1_permuted = np.transpose(tensor, (0, 3, 1, 2))  # (u,r,d,l) -> (u,l,r,d)
-    m1 = t1_permuted.reshape(dim * dim, dim * dim)
+    # --- Decomposition 1: 切分 (Up, Right) - (Down, Left) ---
+    # 對應 cytnx 版第一個 SVD：行指標 (u, r)，列指標 (d, l)
+    m1 = tensor.reshape(dim * dim, dim * dim)
     u1, s1, vh1 = np.linalg.svd(m1, full_matrices=False)
 
     # 決定保留多少個奇異值 (chi1)
@@ -191,16 +185,10 @@ def _trg_step(
         chi1 = min(chi1, chi)
     chi1 = max(1, chi1)
 
-    # 截斷並分配奇異值 sqrt(S) 到兩邊，構建半張量 S1, S3
-    u1_trunc = u1[:, :chi1] * np.sqrt(s1[:chi1])
-    vh1_trunc = vh1[:chi1, :] * np.sqrt(s1[:chi1])[:, None]
-    S1 = u1_trunc.reshape(dim, dim, chi1)  # S1(u, l, new_bond)
-    S3 = vh1_trunc.reshape(chi1, dim, dim)  # S3(new_bond, r, d)
-
-    # --- Decomposition 2: 切分 (Up, Right) - (Down, Left) ---
-    # 將張量變形為矩陣 M2，行指標為 (u, r)，列指標為 (d, l)
-    # 原始張量順序 (u, r, d, l) 已經符合，直接 reshape
-    m2 = tensor.reshape(dim * dim, dim * dim)
+    # --- Decomposition 2: 切分 (Up, Left) - (Right, Down) ---
+    # 對應 cytnx 版第二個 SVD：行指標 (u, l)，列指標 (r, d)
+    t2 = np.transpose(tensor, (0, 3, 1, 2))  # (u,r,d,l) -> (u,l,r,d)
+    m2 = t2.reshape(dim * dim, dim * dim)
     u2, s2, vh2 = np.linalg.svd(m2, full_matrices=False)
 
     # 決定保留多少個奇異值 (chi2)
@@ -212,27 +200,37 @@ def _trg_step(
         chi2 = min(chi2, chi)
     chi2 = max(1, chi2)
 
+    # 兩次 SVD 必須使用相同 chi，確保收縮後張量維度一致
+    chi_eff = min(chi1, chi2)
+
+    # 截斷並分配奇異值 sqrt(S) 到兩邊，構建半張量 S1, S3
+    u1_trunc = u1[:, :chi_eff] * np.sqrt(s1[:chi_eff])
+    vh1_trunc = vh1[:chi_eff, :] * np.sqrt(s1[:chi_eff])[:, None]
+    # 建立半張量：與 cytnx 命名對齊
+    C3 = u1_trunc.reshape(dim, dim, chi_eff)  # C3(u, r, aux_L)
+    C1 = vh1_trunc.reshape(chi_eff, dim, dim)  # C1(aux_L, d, l)
+
     # 截斷並構建半張量 S2, S4
-    u2_trunc = u2[:, :chi2] * np.sqrt(s2[:chi2])
-    vh2_trunc = vh2[:chi2, :] * np.sqrt(s2[:chi2])[:, None]
-    S2 = u2_trunc.reshape(dim, dim, chi2)  # S2(u, r, new_bond)
-    S4 = vh2_trunc.reshape(chi2, dim, dim)  # S4(new_bond, d, l)
+    u2_trunc = u2[:, :chi_eff] * np.sqrt(s2[:chi_eff])
+    vh2_trunc = vh2[:chi_eff, :] * np.sqrt(s2[:chi_eff])[:, None]
+    # 建立半張量：與 cytnx 命名對齊
+    C2 = u2_trunc.reshape(dim, dim, chi_eff)  # C2(u, l, aux_R)
+    C0 = vh2_trunc.reshape(chi_eff, dim, dim)  # C0(aux_R, r, d)
 
     # --- Contraction: 收縮形成新張量 ---
-    # 根據 visualize_trg_topology 中的圖示，將 S1, S2, S3, S4 連接起來。
-    # einsum: "xwl,xyu,ryz,dzw->urdl"
-    # x, y, z, w 是原始格點的指標，被求和。
-    # u, r, d, l 是新的虛擬鍵指標。
+    # 配對與 cytnx 版一致：
+    #   C0.r = C1.l, C1.d = C2.u, C2.l = C3.r, C3.u = C0.d
+    # 自由索引順序：(C0.aux_R, C1.aux_L, C2.aux_R, C3.aux_L)
     coarse_tensor = np.einsum(
-        "xwl,xyu,ryz,dzw->urdl",
-        S1,
-        S2,
-        S3,
-        S4,
+        "axw,byx,yzc,wzd->abcd",
+        C0,  # a=aux_R, x=r, w=d
+        C1,  # b=aux_L, y=d, x=l
+        C2,  # y=u,     z=l, c=aux_R
+        C3,  # w=u,     z=r, d=aux_L
         optimize=True,
     )
 
-    chi_avg = int((chi1 + chi2) / 2)
+    chi_avg = chi_eff
 
     # 回傳奇異值頻譜供視覺化 (這裡我們取第一次分解的 s1 作為代表)
     s_spectrum = s1
@@ -241,6 +239,7 @@ def _trg_step(
 
 
 # === SimpleTRGFlow 類定義 ===
+# TRG 迭代流程管理：負責更新、記錄與可視化
 class SimpleTRGFlow:
     """
     管理 TRG 粗粒化流程的類別。
@@ -260,22 +259,33 @@ class SimpleTRGFlow:
         max_bond_dim: int | None = None,
         rel_svd_cutoff: float = 0.0,
     ) -> None:
-        # 初始化參數
+        # 初始化參數：先驗證張量格式
+        # 確保輸入張量符合 TRG 的 rank-4 各向同性格式
         self.tensor = self._ensure_rank4_square_tensor(tensor)
         self.beta = float(beta)
         self.max_bond_dim = max_bond_dim
         self.rel_svd_cutoff = rel_svd_cutoff
 
+        # 與課程版 trg.py 一致：
+        # 先將初始張量做一次 double trace，定義 g_0 = Tr(T_0)
+        # 並用它來規格化張量，同時將 ln(g_0) 累積進自由能級數。
+        g0 = float(np.einsum("abab->", self.tensor, optimize=True))
+        if g0 <= 0.0:
+            raise RuntimeError("初始張量的 trace 非正，數值不穩定")
+        self.tensor = self.tensor / g0
+
         # 用於累積自由能的變數
-        # 公式: f = -T * sum( ln(g_n) / 2^n )
-        self.free_energy_sum_ln_gn_weighted = 0.0
+        # 公式: f = -T * sum_n [ ln(g_n) / 2^n ] （維持原本的權重設定）
+        # 這裡預先把 n=0 的 ln(g_0) 加入級數（其權重為 1）。
+        self.free_energy_sum_ln_gn_weighted = math.log(g0)
         self.step = 0  # 當前迭代步數
         self.initial_num_sites = 1  # 初始只有一個格點
         self.current_scale_factor = 1.0  # 當前步的權重 (1/2^n)
 
-        # 記錄奇異值頻譜的歷史列表
+        # 記錄奇異值頻譜的歷史列表（用於後續繪圖）
         self.spectrum_history: list[np.ndarray] = []
 
+    # 內部檢查工具：避免輸入張量維度錯誤
     def _ensure_rank4_square_tensor(self, tensor: np.ndarray) -> np.ndarray:
         """輔助方法：驗證輸入張量的格式。"""
         arr = np.asarray(tensor, dtype=np.float64)
@@ -285,11 +295,12 @@ class SimpleTRGFlow:
             raise ValueError("張量必須各向同性 (所有維度相等)")
         return arr
 
+    # 單步更新：回傳實際 chi 與當步歸一化因子
     def update(self) -> tuple[int, float]:
         """
         執行單步迭代：
         1. 調用 _trg_step 進行張量收縮。
-        2. 提取最大元素作為歸一化因子 (norm)。
+        2. 以 double trace 作為歸一化因子 g_n（與課程版一致）。
         3. 更新自由能累積和。
         """
         coarse, chi_eff, s_spectrum = _trg_step(
@@ -300,29 +311,35 @@ class SimpleTRGFlow:
         max_s_to_store = self.max_bond_dim if self.max_bond_dim is not None else chi_eff
         self.spectrum_history.append(s_spectrum[:max_s_to_store])
 
-        # 歸一化：找出張量中的最大值 g_n
-        norm = float(np.max(np.abs(coarse)))
-        if norm <= 0.0:
-            raise RuntimeError("TRG 歸一化因子為零 (數值不穩定)")
+        # 歸一化：使用 double trace 作為 g_n
+        # 對應課程版 trg.py 中的 TT.Trace("u","d").Trace("r","l")
+        g_n = float(np.einsum("abab->", coarse, optimize=True))
+        if g_n <= 0.0:
+            raise RuntimeError("TRG 歸一化因子 (trace) 非正，數值不穩定")
 
-        # 將張量除以 norm，保持數值在可控範圍內
-        self.tensor = coarse / norm
+        # 將張量除以 g_n，保持數值在可控範圍內
+        self.tensor = coarse / g_n
 
         self.step += 1
-        # 更新權重因子：每一步系統尺寸縮小 2 倍 (或者說格點數合併為一半)，所以權重除以 2
+        # 更新權重因子：維持原本設計，每步權重除以 2
         self.current_scale_factor /= 2.0
 
         # 累積自由能貢獻: (1/2^n) * ln(g_n)
-        self.free_energy_sum_ln_gn_weighted += self.current_scale_factor * math.log(
-            norm
+        self.free_energy_sum_ln_gn_weighted += (
+            self.current_scale_factor * math.log(g_n)
         )
 
-        return chi_eff, norm
+        return chi_eff, g_n
 
+    # 執行完整迭代，並在結束後輸出視覺化結果
     def run(self, iterations: int) -> None:
         """執行指定次數的迭代，並在結束後繪圖。"""
         if iterations < 0:
             raise ValueError("迭代次數需為非負整數")
+
+        # 用於記錄每一步的自由能誤差（百分比，取絕對值以便使用 log-scale）
+        error_history: list[float] = []
+        step_history: list[int] = []
 
         visualize_trg_topology()  # 在開始前顯示 ASCII 拓撲圖
 
@@ -337,34 +354,42 @@ class SimpleTRGFlow:
             # 計算當前估計的自由能
             current_fe = self.free_energy_per_spin()
 
+            # 以 Onsager 解 -2.109651 作為參考，自由能相對誤差（百分比）
+            error_percent = (current_fe + 2.109651) / 2.109651 * 100.0
+            # 記錄絕對值，避免 log-scale 中出現負值或零
+            error_history.append(abs(error_percent))
+            step_history.append(self.step)
+
             print(
                 f"[step {self.step}] chi={chi_eff}, norm={norm:.6e}, "
-                f"sites={current_effective_sites}, FE/spin={current_fe:.8f}"
+                f"sites={current_effective_sites}, FE/spin={current_fe:.8f}, "
+                f"error ={error_percent:.6f}%"
             )
 
         if iterations > 0:
             self.plot_spectrum_evolution()
+            # 在完成迭代後繪製 error vs. step（y 軸採用 log-scale）
+            plot_error_vs_step(step_history, error_history)
 
+    # 計算單位格點自由能（對應課程版權重）
     def free_energy_per_spin(self) -> float:
         """
         計算當前的單位格點自由能。
-        公式: f = -T * [ sum(ln g_n / 2^n) + ln(Tr(T_final)) / (N_total) ]
+        公式: f = -T * sum_n [ ln(g_n) / 2^n ]
+        其中 g_n 為每一步 coarse-graining 的 double trace 規格化因子。
         """
         # 將最終張量收縮為一個標量 (Trace)
         final_scalar = float(np.einsum("abab->", self.tensor, optimize=True))
         if final_scalar <= 0.0:
             raise RuntimeError("TRG 最終收縮結果非正值")
 
-        # 總有效格點數 N
-        total_sites = self.initial_num_sites * (2**self.step)
-
-        # 總 ln Z / N = 累積因子 + 剩餘項 / N
-        logZ_per_site = self.free_energy_sum_ln_gn_weighted + (
-            math.log(final_scalar) / total_sites
-        )
+        # 在 trace 規一化方案下，最終張量的 trace ~ 1，
+        # 因此不再額外加入 ln(Tr(T_final))/N 的尾項，與課程版公式完全對齊。
+        logZ_per_site = self.free_energy_sum_ln_gn_weighted
 
         return -(1.0 / self.beta) * logZ_per_site
 
+    # 繪製奇異值頻譜演化，觀察截斷與收斂
     def plot_spectrum_evolution(self):
         """
         繪製奇異值頻譜演化圖。
@@ -423,12 +448,41 @@ class SimpleTRGFlow:
         print(f"\n[視覺化] 奇異值頻譜演化圖已儲存: {out_path}")
 
 
+# 輔助繪圖：自由能誤差隨步數變化
+def plot_error_vs_step(steps: list[int], errors_percent: list[float]) -> None:
+    """
+    根據 TRG 每一步的自由能誤差，繪製 error vs. step 圖。
+
+    使用對數 y 軸來放大早期步驟的誤差變化：
+    - x 軸：TRG coarse-graining step。
+    - y 軸：自由能相對誤差的絕對值（百分比）。
+    """
+    if not steps or not errors_percent:
+        return
+
+    # 確保所有誤差皆為正數，且避免出現 0 造成 log-scale 問題
+    errors_safe = [max(abs(e), 1e-12) for e in errors_percent]
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.semilogy(steps, errors_safe, "o-", markersize=4)
+
+    ax.set_xlabel("TRG Step")
+    ax.set_ylabel("Absolute Relative Error (%)")
+    ax.set_title("TRG Free Energy Error vs Step")
+    ax.grid(True, which="both", ls="-", alpha=0.2)
+
+    out_path = "trg_error_vs_step.png"
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
+    print(f"[視覺化] 自由能誤差隨步數變化圖已儲存: {out_path}")
+
+
 # === main 函數定義 ===
 def main() -> None:
+    # 命令列參數：控制迭代次數與截斷維度
     parser = argparse.ArgumentParser(description="TRG二維Ising模型演示與視覺化")
     parser.add_argument("--step", type=int, default=0, help="TRG 迭代次數")
     parser.add_argument("--chi", type=int, default=16, help="TRG 最大鍵維度 (chi)")
-    parser.add_argument("--rel-cutoff", type=float, default=0.0, help="相對截斷門檻")
+    parser.add_argument("--rel-cutoff", type=float, default=1e-16, help="相對截斷門檻")
     args = parser.parse_args()
 
     # 計算 Ising 模型物理參數 (臨界點)
@@ -451,11 +505,12 @@ def main() -> None:
 
     # 3. 輸出最終結果
     final_fe = trg_flow.free_energy_per_spin()
+    error_fe = (final_fe + 2.109651) / 2.109651 * 100.0
     print(f"\n最終結果 (Step {args.step}):")
     print(f"有效格點數: {trg_flow.initial_num_sites * (2**trg_flow.step)}")
     print(f"自由能/自旋: {final_fe:.8f}")
+    print(f"誤差：{error_fe:.6f}%")
 
 
 if __name__ == "__main__":
     main()
-

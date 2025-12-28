@@ -42,7 +42,14 @@ Thumbs.db
 *.npy
 *.npz
 *.mat
+*.png
 
 # AI Notebook
 tasks/
 context/
+.mplcache/
+cleanup_structure.md
+archive/
+__pycache__/
+*.pyc
+.DS_Store

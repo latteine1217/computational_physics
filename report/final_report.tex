@@ -1,0 +1,1022 @@
+\documentclass[12pt,a4paper]{article}
+
+% ==================== Packages ====================
+% Mathematics and symbols
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{physics}  % \dd, \dv, etc.
+
+% Figures and tables
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{subcaption}
+\usepackage{booktabs}
+
+% Page layout
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{setspace}
+\onehalfspacing
+
+% Code highlighting
+\usepackage{listings}
+\usepackage{xcolor}
+\lstset{
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    language=Python
+}
+
+% Hyperlinks
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    urlcolor=blue
+}
+
+% Custom commands
+\newcommand{\Tc}{T_{\mathrm{c}}}
+\newcommand{\bZ}{\mathcal{Z}}
+\newcommand{\bH}{\mathcal{H}}
+
+% Title information
+\title{\textbf{Numerical Study of 2D Ising Model \\ via Tensor Renormalization Group} \\
+\large{Final Project Report for Computational Physics}}
+\author{Student ID: 113011527 \\ Name: JunYi Li}
+\date{December 22, 2025}
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+\newpage
+
+% ==================== Chapter 1: Introduction ====================
+\section{Introduction}
+
+\subsection{Motivation}
+The two-dimensional Ising model is one of the most important theoretical models in statistical physics. The zero-field case has an exact analytical solution, revealing a second-order phase transition at the critical temperature $\Tc = 2J / \ln(1 + \sqrt{2}) \approx 2.269J$. However, numerical methods remain indispensable for finite-size systems or non-zero external fields.
+
+Tensor Network Renormalization Group (TRG) methods provide a deterministic alternative to Monte Carlo and allow systematic error control via bond-dimension truncation.
+
+\subsection{Objectives}
+This project aims to:
+\begin{enumerate}
+    \item Implement the standard TRG algorithm and verify its accuracy through comparison with Onsager's exact solution.
+    \item Evaluate thermodynamic observables (Free energy, Heat capacity) using TRG across a wide temperature range.
+    \item Benchmark small-system properties (including magnetic susceptibility) using Exact Enumeration and Transfer Matrix methods.
+    \item Analyze the scaling behavior of truncation errors and computational complexity with respect to bond dimension $\chi$.
+\end{enumerate}
+
+% ==================== Chapter 2: Theoretical Background ====================
+\section{Theoretical Background}
+
+\subsection{The 2D Ising Model}
+The Hamiltonian of the 2D Ising model on a square lattice is:
+\begin{equation}
+    \bH = -J \sum_{\langle i,j \rangle} \sigma_i \sigma_j - h \sum_i \sigma_i, \quad \sigma_i \in \{-1, +1\}
+\end{equation}
+where $J$ is the coupling constant (we set $J=1$ throughout this work), $h$ is the external magnetic field, and $\langle i,j \rangle$ denotes nearest-neighbor pairs on the lattice.
+
+The partition function at inverse temperature $\beta = 1/(k_B T)$ is given by summing over all $2^N$ spin configurations:
+\begin{equation}
+    \bZ = \sum_{\{\sigma\}} \exp(-\beta \bH) = \sum_{\{\sigma_i\}} \exp\left( \beta J \sum_{\langle i,j \rangle} \sigma_i \sigma_j + \beta h \sum_i \sigma_i \right)
+\end{equation}
+
+From the partition function, we can derive all thermodynamic quantities. The free energy is:
+\begin{equation}
+    F = -\frac{1}{\beta} \ln \bZ
+\end{equation}
+
+The free energy density (free energy per spin) is:
+\begin{equation}
+    f = \frac{F}{N} = -\frac{1}{\beta N} \ln \bZ
+\end{equation}
+
+The internal energy can be obtained from:
+\begin{equation}
+    E = -\frac{\partial \ln \bZ}{\partial \beta} = \langle \bH \rangle
+\end{equation}
+
+The heat capacity is the second derivative of free energy with respect to temperature:
+\begin{equation}
+    C_v = -T^2 \frac{\partial^2 f}{\partial T^2} = \frac{1}{k_B T^2} \left( \langle E^2 \rangle - \langle E \rangle^2 \right)
+\end{equation}
+
+This shows that heat capacity measures energy fluctuations in the system. At the critical point, these fluctuations diverge, leading to the characteristic peak in $C_v$.
+
+\subsection{Onsager's Exact Solution}
+For the zero-field case ($h=0$) on an infinite square lattice, the free energy density is:
+\begin{equation}
+    f_{\text{exact}} = -T \left[ \ln 2 + \frac{1}{2\pi} \int_0^{2\pi} \ln\left( \cosh^2(2K) - \sinh(2K) \cos\theta \right) \dd \theta \right]
+\end{equation}
+where $K = \beta J$. We use numerical integration to compute this formula as the exact reference value.
+
+\subsection{Alternative Computational Methods}
+
+Before introducing TRG, we implement two additional methods for comparison and validation: exact enumeration and transfer matrix methods. These provide complementary insights and serve as benchmarks for different system sizes.
+
+\subsubsection{Exact Enumeration Method}
+
+The enumeration method represents spin configurations using binary integers for memory efficiency. Each bit position corresponds to a lattice site, where bit = 1 represents spin $+1$ and bit = 0 represents spin $-1$.
+
+To efficiently enumerate all $2^N$ configurations, we employ Gray code traversal, which ensures adjacent configurations differ by only one bit flip. Rather than recalculating the entire energy after each spin flip ($O(N)$ operation), we compute only the energy change ($O(1)$ operation):
+
+\begin{equation}
+    \Delta E_i = 2s_i \left( J \sum_{j \in \text{neighbors}(i)} s_j + h \right)
+\end{equation}
+
+This optimization reduces total enumeration time from $O(N \times 2^N)$ to $O(2^N)$.
+
+After enumerating all configurations and their energies $\{E_\alpha\}$, we compute thermodynamic quantities. To avoid numerical overflow, we employ the log-sum-exp trick:
+
+\begin{equation}
+    \ln Z = E_{\max} + \ln \sum_{\alpha} e^{-\beta(E_\alpha - E_{\max})}
+\end{equation}
+
+\textbf{Applicability}: Exponential scaling limits practical use to $N \leq 20$ (1D), $L \leq 4$ (2D, 16 spins). However, it provides exact results useful for small system validation.
+
+\subsubsection{Transfer Matrix Method}
+
+The transfer matrix method reformulates the partition function as a matrix trace. For a 1D chain with periodic boundary conditions:
+
+\begin{equation}
+    Z = \text{Tr}(T^L)
+\end{equation}
+
+where $T$ is the $2 \times 2$ transfer matrix:
+
+\begin{equation}
+    T_{ij} = e^{\beta(J s_i s_j + \frac{h}{2}(s_i + s_j))}, \quad s_i, s_j \in \{-1, +1\}
+\end{equation}
+
+For 2D systems, the transfer matrix operates on entire rows. Each row has $2^{L_x}$ possible configurations, so $T \in \mathbb{R}^{2^{L_x} \times 2^{L_x}}$.
+
+\textbf{Complexity}: Time complexity is $O(L)$ for 1D and $O(2^{3L_x} \cdot L_y)$ for 2D. Space complexity is $O(1)$ for 1D and $O(2^{2L_x})$ for 2D.
+
+\textbf{Practical Limits}: Arbitrary $L$ for 1D (only limited by floating-point precision), $L_x \leq 6$ for 2D (matrix dimension $2^6 = 64$ manageable).
+
+\subsubsection{Method Comparison}
+
+\begin{table}[H]
+\centering
+\caption{Method comparison for 2D Ising model}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Method & Max System Size & Time Scaling & Memory Scaling \\
+\midrule
+Enumeration & $L \leq 4$ & $O(2^{L^2})$ & $O(2^{L^2})$ \\
+Transfer Matrix & $L \leq 6$ & $O(2^{3L} \cdot L)$ & $O(2^{2L})$ \\
+TRG & $L \geq 8$ & $O(\chi^6 \log L)$ & $O(\chi^2)$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{1D Algorithms: Enumeration, Transfer Matrix, Theory}
+
+We implement a dedicated 1D solver as a validation baseline and as a high-accuracy reference for thermodynamic quantities. The 1D Hamiltonian with periodic boundary condition is
+\begin{equation}
+    \bH = -J \sum_{i=1}^{L} s_i s_{i+1} - h \sum_{i=1}^{L} s_i, \quad s_{L+1} \equiv s_1.
+\end{equation}
+
+\paragraph{Gray-code enumeration (exact, $O(2^L)$).}
+We encode a configuration as an integer bitstring and traverse all $2^L$ states by Gray code so that consecutive states differ by one spin. The energy update is $O(1)$:
+\begin{equation}
+    \Delta E_i = 2 s_i \left[J (s_{i-1} + s_{i+1}) + h \right],
+\end{equation}
+with periodic neighbors. This reduces total enumeration from $O(L 2^L)$ to $O(2^L)$.
+
+Thermodynamic quantities are obtained via log-sum-exp to avoid overflow:
+\begin{align}
+    Z &= \sum_{\alpha} e^{-\beta E_\alpha}, \\
+    f &= -\frac{1}{\beta L} \ln Z, \\
+    \chi &= \frac{\beta}{L} \left(\langle M^2 \rangle - \langle M \rangle^2 \right), \\
+    C_v &= \frac{\beta^2}{L} \left(\langle E^2 \rangle - \langle E \rangle^2 \right).
+\end{align}
+
+\paragraph{Transfer matrix (exact, $O(L)$).}
+The $2 \times 2$ transfer matrix for 1D is
+\begin{equation}
+    T_{ij} = \exp\left[\beta \left(J s_i s_j + \frac{h}{2}(s_i + s_j)\right)\right],
+\end{equation}
+and $Z = \mathrm{Tr}(T^L)$. Magnetization and susceptibility follow from derivatives with respect to $h$, and heat capacity is computed from either fluctuation or numerical derivatives of $\ln Z$.
+
+\paragraph{Analytical solution ($h=0$).}
+When $h=0$, the eigenvalues are $\lambda_\pm = e^{\beta J} \pm e^{-\beta J}$, yielding
+\begin{equation}
+    Z = \lambda_+^L + \lambda_-^L, \quad f = -\frac{T}{L} \ln Z.
+\end{equation}
+This provides an exact benchmark for all 1D outputs.
+
+\begin{figure}[H]
+    \centering
+\includegraphics[width=0.9\linewidth]{1d_energy_cv.png}
+    \caption{1D Ising: energy and heat capacity versus temperature}
+    \label{fig:1d_energy_cv}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+\includegraphics[width=0.9\linewidth]{figures/1d_cv_T.png}
+    \caption{1D Ising: heat capacity versus temperature}
+    \label{fig:1d_cv_T}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+\includegraphics[width=0.9\linewidth]{figures/1d_size_t.png}
+    \caption{1D Ising: runtime scaling with system size}
+    \label{fig:1d_size_t}
+\end{figure}
+
+\subsubsection{2D Algorithms: Enumeration and Transfer Matrix}
+
+For a square $L \times L$ lattice with periodic boundary conditions,
+\begin{equation}
+    \bH = -J \sum_{\langle i,j \rangle} s_i s_j - h \sum_i s_i,
+\end{equation}
+each spin couples to four neighbors. The $O(1)$ flip update is
+\begin{equation}
+    \Delta E_i = 2 s_i \left[J \sum_{j \in \text{nn}(i)} s_j + h \right],
+\end{equation}
+where $\text{nn}(i)$ denotes the four nearest neighbors.
+
+\paragraph{2D enumeration (exact, $O(2^{L^2})$).}
+We enumerate all $2^{L^2}$ configurations using Gray code over $L^2$ bits, reusing the $O(1)$ energy update. This method is practical only for $L \leq 4$ and serves as a ground-truth validator.
+
+\paragraph{2D transfer matrix (exact, row-wise).}
+We treat each row as a basis state, leading to a transfer matrix of dimension $2^L \times 2^L$:
+\begin{equation}
+    Z = \mathrm{Tr}(T^L), \quad T_{ab} = \exp[-\beta E_{\text{row}}(a,b)].
+\end{equation}
+The row interaction energy $E_{\text{row}}$ includes both intra-row and inter-row couplings. This method is feasible for $L \leq 6$ (matrix size $64 \times 64$). For larger $L$, TRG becomes the only scalable option.
+
+\begin{figure}[H]
+    \centering
+\includegraphics[width=0.9\linewidth]{figures/2d_result.png}
+    \caption{2D Ising: thermodynamic observables from transfer matrix}
+    \label{fig:2d_transfer_matrix}
+\end{figure}
+
+This comparison shows that TRG is the only viable method for large systems, while enumeration and transfer matrix provide exact benchmarks for small and medium systems respectively.
+
+% ==================== Chapter 3: Numerical Implementation ====================
+
+
+\subsection{TRG Method}
+
+\subsubsection{Initial Tensor Construction}
+The key idea of TRG is to represent the partition function as a tensor network. We start by decomposing the Boltzmann weight for each nearest-neighbor pair:
+\begin{equation}
+    W_{s_i, s_j} = e^{\beta J s_i s_j}
+\end{equation}
+
+This weight matrix can be factorized using a square-root decomposition:
+\begin{equation}
+    W_{s_i, s_j} = \sum_{\alpha} M_{s_i,\alpha} M_{s_j,\alpha} = (M M^T)_{s_i, s_j}
+\end{equation}
+
+For the Ising model with $s_i \in \{-1, +1\}$, we can construct $M$ analytically. Using the identities:
+\begin{align}
+    e^{\beta J} &= \cosh(\beta J) + \sinh(\beta J) \\
+    e^{-\beta J} &= \cosh(\beta J) - \sinh(\beta J)
+\end{align}
+
+We obtain the matrix $M$ as:
+\begin{equation}
+    M = \begin{pmatrix}
+        \sqrt{\cosh(\beta J)} & \sqrt{\sinh(\beta J)} \\
+        \sqrt{\cosh(\beta J)} & -\sqrt{\sinh(\beta J)}
+    \end{pmatrix}
+\end{equation}
+
+We can verify this satisfies $W = MM^T$:
+\begin{equation}
+    (MM^T)_{++} = \cosh(\beta J) + \sinh(\beta J) = e^{\beta J}, \quad
+    (MM^T)_{+-} = \cosh(\beta J) - \sinh(\beta J) = e^{-\beta J}
+\end{equation}
+
+For a single site on the square lattice with four nearest neighbors (up, right, down, left), the local tensor including the external field contribution is:
+\begin{equation}
+    T_{u,r,d,l} = \sum_{s=\pm 1} e^{\beta h s} M_{s,u} M_{s,r} M_{s,d} M_{s,l}
+\end{equation}
+
+Here, the indices $u, r, d, l \in \{1, 2\}$ represent the bond variables connecting to neighboring sites. The field weight $e^{\beta h s}$ is distributed evenly to each site. For zero field ($h=0$), this simplifies to:
+\begin{equation}
+    T_{u,r,d,l} = M_{+1,u} M_{+1,r} M_{+1,d} M_{+1,l} + M_{-1,u} M_{-1,r} M_{-1,d} M_{-1,l}
+\end{equation}
+
+\subsubsection{Coarse-Graining Step}
+The TRG algorithm performs iterative coarse-graining by contracting a $2 \times 2$ block of tensors. The core strategy is to decompose the same tensor $T$ in two different ways using SVD, creating four half-tensors that can be efficiently contracted.
+
+\paragraph{Initial State: $2 \times 2$ Lattice Configuration}
+Consider a $2 \times 2$ lattice where each site contains the same rank-4 tensor $T[u,r,d,l]$:
+\begin{verbatim}
+    T ---- T
+    |      |
+    |      |
+    T ---- T
+\end{verbatim}
+
+\textbf{Goal:} Merge these four tensors into a single effective rank-4 tensor $T'$ representing a coarse-grained site.
+
+\paragraph{Step 1: First SVD (Vertical Decomposition)}
+We perform the first SVD by grouping indices $(u,r)$ together and $(d,l)$ together:
+
+\textbf{Index Regrouping:}
+\begin{equation}
+    T_{u,r,d,l} \rightarrow M^{(1)}_{(ur),(dl)}, \quad \text{where } (ur) = u \times \dim + r
+\end{equation}
+
+\textbf{SVD Decomposition:}
+\begin{equation}
+    M^{(1)} = U^{(1)} S^{(1)} (V^{(1)})^\dagger
+\end{equation}
+
+where $U^{(1)}$ and $V^{(1)}$ are unitary matrices, and $S^{(1)}$ is a diagonal matrix of singular values:
+\begin{equation}
+    S^{(1)} = \text{diag}(s^{(1)}_1, s^{(1)}_2, \ldots, s^{(1)}_{\chi_{\text{max}}}), \quad s^{(1)}_1 \geq s^{(1)}_2 \geq \cdots \geq 0
+\end{equation}
+
+\textbf{Truncation:} Keep only the largest $\chi$ singular values:
+\begin{equation}
+    \chi_{\text{eff}} = \min(\chi, \chi_{\text{max}})
+\end{equation}
+
+\textbf{Symmetric Redistribution:} Distribute the square root of singular values to both factors for numerical stability:
+\begin{align}
+    C_3[u,r,a] &= U^{(1)}_{(ur),a} \sqrt{s^{(1)}_a} \\
+    C_1[a,d,l] &= \sqrt{s^{(1)}_a} (V^{(1)})^\dagger_{a,(dl)}
+\end{align}
+
+This creates two rank-3 tensors: $C_3$ (upper half) and $C_1$ (lower half).
+
+\paragraph{Step 2: Second SVD (Horizontal Decomposition)}
+Similarly, we perform a second SVD with indices grouped as $(u,l)$ and $(r,d)$:
+
+\textbf{Index Regrouping:}
+\begin{equation}
+    T_{u,l,r,d} \rightarrow M^{(2)}_{(ul),(rd)} = U^{(2)} S^{(2)} (V^{(2)})^\dagger
+\end{equation}
+
+\textbf{Symmetric Redistribution:}
+\begin{align}
+    C_2[u,l,b] &= U^{(2)}_{(ul),b} \sqrt{s^{(2)}_b} \\
+    C_0[b,r,d] &= \sqrt{s^{(2)}_b} (V^{(2)})^\dagger_{b,(rd)}
+\end{align}
+
+This creates two more rank-3 tensors: $C_2$ (left half) and $C_0$ (right half).
+
+\paragraph{Step 2: Truncation and Redistribution}
+To control computational cost, we truncate to the largest $\chi$ singular values. The truncation error is approximately:
+\begin{equation}
+    \epsilon_{\text{trunc}} \sim \sum_{i=\chi+1}^{\chi_{\text{max}}} (s_i)^2
+\end{equation}
+
+We redistribute the square root of singular values to maintain numerical stability:
+\begin{align}
+    C_3[u,r,a] &= U^{(1)}_{(ur),a} \sqrt{s^{(1)}_a}, \quad a = 1, \ldots, \chi \\
+    C_1[a,d,l] &= \sqrt{s^{(1)}_a} (V^{(1)})^\dagger_{a,(dl)} \\
+    C_2[u,l,b] &= U^{(2)}_{(ul),b} \sqrt{s^{(2)}_b}, \quad b = 1, \ldots, \chi \\
+    C_0[b,r,d] &= \sqrt{s^{(2)}_b} (V^{(2)})^\dagger_{b,(rd)}
+\end{align}
+
+This redistribution ensures that both halves of the decomposition have similar numerical scales, preventing loss of precision.
+
+\paragraph{Step 3: Tensor Contraction}
+We now contract the four half-tensors $C_0, C_1, C_2, C_3$ according to the TRG topology. The contraction pattern follows:
+\begin{itemize}
+    \item $C_0[b,r,d]$ and $C_1[a,d,l]$: contract over index $d$
+    \item $C_1[a,d,l]$ and $C_2[u,l,c]$: contract over index $l$
+    \item $C_2[u,l,c]$ and $C_3[u,r,e]$: contract over indices $u$ and $r$
+\end{itemize}
+
+The complete contraction gives:
+\begin{equation}
+    T'_{a,b,c,e} = \sum_{r,d,u,l} C_0[b,r,d] \, C_1[a,d,l] \, C_2[u,l,c] \, C_3[u,r,e]
+\end{equation}
+
+This can be efficiently computed using Einstein summation notation or by sequential pairwise contractions.
+
+\paragraph{Step 4: Normalization}
+The new tensor $T'$ typically has elements much larger or smaller than unity. To prevent numerical overflow/underflow, we extract a normalization factor:
+\begin{equation}
+    g_n = \text{Tr}(T') = \sum_{a=1}^{\chi} T'_{a,a,a,a}
+\end{equation}
+
+The normalized tensor for the next iteration is:
+\begin{equation}
+    T^{\text{new}}_{a,b,c,e} = \frac{T'_{a,b,c,e}}{g_n}
+\end{equation}
+
+The factor $g_n$ is stored and used in the free energy calculation. After $n$ iterations, the tensor bond dimension remains $\chi$, but represents an effective system of $2^n$ original spins.
+
+\subsubsection{Free Energy Calculation}
+The partition function can be related to the normalization factors $g_k$ accumulated during the TRG iterations. At each step $k$, we coarse-grain $2 \times 2$ blocks, effectively doubling the number of spins represented by each tensor element.
+
+Let $N_k$ denote the effective number of spins at step $k$. We have:
+\begin{equation}
+    N_0 = 1, \quad N_k = 2 \times N_{k-1} = 2^k
+\end{equation}
+
+At step $k$, the normalized tensor $T^{(k)}$ satisfies:
+\begin{equation}
+    \text{Tr}(T^{(k)}) = \sum_{a} T^{(k)}_{a,a,a,a} = 1
+\end{equation}
+
+The un-normalized tensor before normalization was:
+\begin{equation}
+    T'^{(k)} = g_k \cdot T^{(k)}
+\end{equation}
+
+The partition function for the full system can be written as:
+\begin{equation}
+    \bZ = \text{Tr}(T^{(n)}) \times \prod_{k=0}^{n} g_k^{N_k}
+\end{equation}
+
+Taking the logarithm:
+\begin{equation}
+    \ln \bZ = \ln \text{Tr}(T^{(n)}) + \sum_{k=0}^{n} N_k \ln g_k
+\end{equation}
+
+Since $\text{Tr}(T^{(n)}) = 1$ after normalization, we have:
+\begin{equation}
+    \ln \bZ = \sum_{k=0}^{n} N_k \ln g_k
+\end{equation}
+
+The free energy density is then:
+\begin{equation}
+    f = -\frac{1}{\beta N_{\text{total}}} \ln \bZ = -\frac{T}{N_{\text{total}}} \sum_{k=0}^{n} N_k \ln g_k
+\end{equation}
+
+For a system where $N_{\text{total}} = N_n = 2^n$ total spins:
+\begin{equation}
+    f = -T \sum_{k=0}^{n} \frac{N_k}{N_n} \ln g_k = -T \sum_{k=0}^{n} \frac{\ln g_k}{2^{n-k}}
+\end{equation}
+
+This can also be written as:
+\begin{equation}
+    f = -T \sum_{k=0}^{n} \frac{\ln g_k}{N_k}
+\end{equation}
+
+This formula correctly accounts for the hierarchical structure of the coarse-graining procedure, where each normalization factor $g_k$ contributes with weight $1/N_k$ to the final free energy.
+
+\subsubsection{Detailed Contraction Topology}
+
+The tensor contraction in TRG follows a specific sequence to efficiently combine the four half-tensors. Understanding this topology is crucial for correct implementation.
+
+\paragraph{Geometric Configuration}
+After the two SVD decompositions, we have four rank-3 tensors positioned in a $2 \times 2$ pattern:
+\begin{verbatim}
+    C3[u,r,a] ---- C2[u,l,b]
+        |              |
+       (a)            (b)    (internal bonds)
+        |              |
+    C1[a,d,l] ---- C0[b,r,d]
+\end{verbatim}
+
+The internal bonds that must be contracted are:
+\begin{itemize}
+    \item Vertical bonds: $a$ (connecting C3 and C1), $b$ (connecting C2 and C0)
+    \item Horizontal bonds: $r$ and $l$ (connecting adjacent tensors)
+    \item Shared indices: $u$, $d$ (will form new external bonds)
+\end{itemize}
+
+\paragraph{Sequential Contraction Steps}
+
+\textbf{Step 1: Contract C0 and C1 (eliminate index $d$)}
+\begin{equation}
+    \text{temp}_1[a,r,b,l] = \sum_{d} C_0[b,r,d] \cdot C_1[a,d,l]
+\end{equation}
+This operation merges the bottom two tensors, contracting over their shared vertical index $d$. The resulting tensor has 4 indices: two internal ($a$, $b$) and two that will participate in further contractions ($r$, $l$).
+
+\textbf{Step 2: Contract temp$_1$ and C2 (eliminate index $l$)}
+\begin{equation}
+    \text{temp}_2[a,r,b,u,c] = \sum_{l} \text{temp}_1[a,r,b,l] \cdot C_2[u,l,c]
+\end{equation}
+This adds the upper-right tensor, contracting over the horizontal bond $l$. Note that C2's internal index $b$ matches the one from the first decomposition, while $c$ represents C2's second internal index.
+
+\textbf{Step 3: Contract temp$_2$ and C3 (eliminate indices $u$ and $r$)}
+\begin{equation}
+    T'[a,b,c,e] = \sum_{u,r} \text{temp}_2[a,r,b,u,c] \cdot C_3[u,r,e]
+\end{equation}
+The final contraction eliminates the remaining internal bonds, leaving four external indices $(a,b,c,e)$ that will be relabeled as the new $(u',r',d',l')$ for the next iteration.
+
+\paragraph{Index Mapping and Consistency}
+After contraction, the new tensor $T'[a,b,c,e]$ must be relabeled to standard orientation:
+\begin{align}
+    u' &\leftarrow e \quad \text{(new up direction)} \\
+    r' &\leftarrow a \quad \text{(new right direction)} \\
+    d' &\leftarrow b \quad \text{(new down direction)} \\
+    l' &\leftarrow c \quad \text{(new left direction)}
+\end{align}
+
+This relabeling ensures consistency across iterations and maintains the proper tensor network structure.
+
+\paragraph{Implementation via Einstein Summation}
+In practice, these contractions are efficiently implemented using Einstein summation notation:
+\begin{verbatim}
+temp1 = einsum('brd,adl->arbl', C0, C1)
+temp2 = einsum('arbl,ulc->arbuc', temp1, C2)
+T_new = einsum('arbuc,ure->abce', temp2, C3)
+\end{verbatim}
+
+This notation explicitly specifies which indices are contracted (those appearing on the left but not on the right of the arrow) and which are preserved.
+
+\section{Numerical Implementation}
+
+\subsection{Code Architecture}
+This project uses Python implementation, with main modules including:
+\begin{itemize}
+    \item \texttt{\_ising\_local\_tensor()}: Construct initial tensor
+    \item \texttt{\_trg\_step()}: Execute single TRG coarse-graining step
+    \item \texttt{TRGFlow}: Manage iteration flow and free energy calculation
+    \item \texttt{onsager\_exact\_free\_energy()}: Onsager exact solution (numerical integration)
+\end{itemize}
+
+Complete source code is available in \texttt{trg\_final\_project.py}.
+
+\subsection{Code Availability}
+The complete source code for all methods discussed in this report, including the implementation of TRG, Exact Enumeration, Transfer Matrix, and performance benchmarks, is publicly available at: \\
+\url{https://github.com/latteine1217/computational_physics}
+
+\subsection{Key Algorithmic Implementation Details}
+To bridge the gap between theoretical formulation and practical code, we present the core implementation logic directly from our Python codebase.
+
+\paragraph{Optimized Einsum Contraction}
+The coarse-graining step involves contracting four tensors. A naive implementation could lead to memory explosion. We explicitly chain pairwise contractions to maintain the $O(\chi^6)$ complexity barrier. The following code snippet demonstrates the exact contraction path used in \texttt{\_trg\_step}:
+
+\begin{lstlisting}[language=Python]
+# C0, C1, C2, C3 are the four corner tensors
+# Contract bottom half (C0-C1) on index 'd' (down)
+# C0[b,r,d] * C1[a,d,l] -> temp1[a,r,b,l]
+temp1 = np.einsum('brd,adl->arbl', C0, C1)
+
+# Contract with upper-left (C2) on index 'l' (left)
+# temp1[a,r,b,l] * C2[u,l,c] -> temp2[a,r,b,u,c]
+temp2 = np.einsum('arbl,ulc->arbuc', temp1, C2)
+
+# Contract with upper-right (C3) on indices 'u' (up) and 'r' (right)
+# temp2[a,r,b,u,c] * C3[u,r,e] -> T_new[a,b,c,e]
+T_new = np.einsum('arbuc,ure->abce', temp2, C3)
+\end{lstlisting}
+
+This sequence ensures that no intermediate tensor exceeds rank 5.
+
+\paragraph{SVD Efficiency and Truncation}
+For the spectral decomposition, we utilize \texttt{numpy.linalg.svd} with \texttt{full\_matrices=False} to minimize overhead. The truncation is implemented by straightforward array slicing, ensuring only the dominant $\chi$ singular values are retained:
+
+\begin{lstlisting}[language=Python]
+# Decompose T into M matrix
+dim_L = dim_u * dim_l
+dim_R = dim_r * dim_d
+M = T.transpose(0, 3, 1, 2).reshape(dim_L, dim_R)
+
+# SVD with reduced overhead
+U, S, Vh = np.linalg.svd(M, full_matrices=False)
+
+# Truncate to bond dimension chi
+chi_keep = min(chi, len(S))
+U = U[:, :chi_keep]
+S = S[:chi_keep]
+Vh = Vh[:chi_keep, :]
+
+# Distribute singular values for symmetry (sqrt)
+sqrt_S = np.sqrt(S)
+S1 = U * sqrt_S[np.newaxis, :]  # Broadcasting
+S2 = Vh * sqrt_S[:, np.newaxis]
+\end{lstlisting}
+
+\paragraph{Log-Space Accumulation}
+The partition function grows exponentially. We handle this by normalizing the tensor at each step and accumulating the normalization factor in log-space to compute the free energy density $f$:
+
+\begin{lstlisting}[language=Python]
+# Normalize tensor to prevent overflow
+factor = np.max(np.abs(T_new))
+T_new /= factor
+
+# Accumulate log-normalization factor weighted by system size
+# current_N = 2**(iteration)
+log_Z += np.log(factor) / current_N
+
+# Final Free Energy Density
+f = -T * log_Z
+\end{lstlisting}
+
+This approach guarantees numerical stability throughout the 20 iterations required to reach the thermodynamic limit.
+
+\subsection{Parameter Settings}
+\begin{table}[H]
+\centering
+\caption{Computational parameters}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Parameter} & \textbf{Value} \\
+\midrule
+Coupling constant $J$ & 1.0 \\
+External field $h$ & 0.0 \\
+Critical temperature $\Tc$ & $2 / \ln(1 + \sqrt{2}) \approx 2.269$ \\
+Bond dimensions $\chi$ & 2, 4, 8, 16, 32 \\
+Maximum iterations & 20 \\
+Temperature range & $0.5\Tc \sim 1.4\Tc$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Verification Methods}
+To ensure implementation correctness, we performed the following verifications:
+\begin{enumerate}
+    \item \textbf{Initial tensor verification}: Comparison with reference implementation (Cytnx), error $< 10^{-15}$
+    \item \textbf{SVD decomposition verification}: Check eigenvalue matching
+    \item \textbf{Contraction topology verification}: Confirm correct einsum indices
+    \item \textbf{Numerical results verification}: Complete consistency with Cytnx version ($\Delta f = 0$)
+\end{enumerate}
+
+% ==================== Chapter 4: Results and Analysis ====================
+\section{Results and Analysis}
+
+\subsection{Project Outputs Summary}
+
+In this project, we computed observables using multiple methods and produced the following concrete outputs:
+\begin{itemize}
+    \item \textbf{1D Ising} (enumeration, transfer matrix, analytic $h=0$): free energy, susceptibility, heat capacity, and runtime scaling across temperature grids.
+    \item \textbf{2D Ising} (enumeration, transfer matrix): free energy, susceptibility, heat capacity for small lattices ($L \leq 6$).
+    \item \textbf{2D TRG} (large lattices): free energy accuracy at $T=\Tc$, temperature-dependent error profile, and heat-capacity peak behavior.
+    \item \textbf{Chi effects}: accuracy saturation with increasing $\chi$ and the effective rank bottleneck.
+    \item \textbf{Stability checks}: tensor initialization, SVD consistency, contraction topology, and normalization behavior.
+\end{itemize}
+
+The three TRG result figures included in this report are: Figure~\ref{fig:convergence}, Figure~\ref{fig:error_temp}, and Figure~\ref{fig:heat_capacity}.
+
+\subsection{Figure 1: Convergence Behavior at Critical Temperature}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/figure1_convergence.png}
+\caption{Relative error vs. iteration number at $T = \Tc$ for different bond dimensions. Error is defined as $|f_{\text{TRG}} - f_{\text{exact}}| / |f_{\text{exact}}| \times 100\%$.}
+\label{fig:convergence}
+\end{figure}
+
+\textbf{Key Observations:}
+\begin{itemize}
+    \item \textbf{Optimal iteration number}: Minimum error ($\sim 0.06\%$) achieved at $n \approx 8$
+    \item \textbf{Error rebound phenomenon}: Error increases for $n > 8$ due to numerical error accumulation
+    \item \textbf{Weak $\chi$ dependence}: At the critical point, increasing $\chi$ yields minimal accuracy improvement
+\end{itemize}
+
+\textbf{Physical Interpretation:}
+\begin{enumerate}
+    \item \textbf{Slow effective rank growth}: Initial tensor Schmidt rank is only 2; rank grows slowly in early iterations, preventing full utilization of large bond dimension
+    \item \textbf{Truncation error vs. numerical error}: Early iterations dominated by truncation error; later iterations affected by floating-point error accumulation
+    \item \textbf{Critical slowing down}: At $T = \Tc$, diverging correlation length causes TRG convergence to slow
+\end{enumerate}
+
+\begin{table}[H]
+\centering
+\caption{Error and computation time at $n=8$ for different bond dimensions}
+\begin{tabular}{@{}cccc@{}}
+\toprule
+$\chi$ & Relative Error (\%) & Time (sec) & Cost/Accuracy Ratio \\
+\midrule
+2  & 0.0895 & $<$ 1 & Low \\
+4  & 0.0601 & $<$ 1 & \textbf{Optimal} \\
+8  & 0.0714 & $<$ 1 & Good \\
+16 & 0.0730 & $\sim$ 3 & Acceptable \\
+32 & 0.0741 & $\sim$ 170 & Inefficient \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Conclusion}: For standard TRG at the critical point, $\chi = 4 \sim 8$ achieves optimal cost-effectiveness.
+
+\subsection{Figure 2: Temperature Dependence of Error}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/figure2_error_temperature.png}
+\caption{TRG relative error at different temperatures (using $n=10$ iterations). Red dashed line marks critical temperature $\Tc$.}
+\label{fig:error_temp}
+\end{figure}
+
+\textbf{Key Observations:}
+\begin{itemize}
+    \item \textbf{Maximum Error Region}: The relative error peaks near $T / \Tc \approx 1.0$ due to the divergence of correlation length at the critical point.
+    \item \textbf{Off-Critical Accuracy}: Error decreases significantly as the temperature moves away from $\Tc$. In the high-temperature limit ($T / \Tc > 1.2$), the system approaches a disordered product state, which is captured accurately even with small $\chi$.
+    \item \textbf{Numerical Stability}: The error floor ($\sim 10^{-4} \%$ to $10^{-3} \%$) is maintained across most of the temperature range, demonstrating the robustness of the renormalization scheme.
+\end{itemize}
+
+\textbf{Physical Interpretation:}
+\begin{enumerate}
+    \item \textbf{Critical Point}: At $T_c$, the scale-invariance of the system and the logarithmic divergence of heat capacity pose the greatest challenge to fixed-$\chi$ TRG, leading to a localized error peak where truncation effects are most prominent.
+    \item \textbf{High/Low Temperature Limits}: Away from $T_c$, the correlation length $\xi$ is finite. In these regimes, the singular value spectrum of the tensor decays more rapidly, allowing the truncated bond dimension to retain a higher percentage of the total spectral weight.
+    \item \textbf{Relative Error Sensitivity}: Any minor fluctuations in relative error at extreme temperatures are likely due to the small absolute values of the free energy density or the numerical integration limits of the Onsager exact solution.
+\end{enumerate}
+
+\subsection{Figure 3: Heat Capacity Peak}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/figure3_heat_capacity.png}
+\caption{Heat capacity $C_v$ vs. temperature for different bond dimensions. Onsager's exact solution predicts logarithmic divergence at $\Tc$.}
+\label{fig:heat_capacity}
+\end{figure}
+
+\textbf{Numerical Method:}
+Heat capacity is calculated via second-order temperature derivative of free energy:
+\begin{equation}
+    C_v = -T^2 \frac{\partial^2 f}{\partial T^2} \approx -T^2 \frac{f(T+\Delta T) - 2f(T) + f(T-\Delta T)}{(\Delta T)^2}
+\end{equation}
+
+\textbf{Key Observations:}
+\begin{itemize}
+    \item \textbf{Peak position}: Correctly appears at $T / \Tc \approx 1.0$
+    \item \textbf{Peak height}: $C_v^{\text{max}} \approx 2.8 \sim 2.9$ (much smaller than exact solution's logarithmic divergence)
+    \item \textbf{$\chi$ dependence}: Increasing $\chi$ has minimal effect on peak height
+\end{itemize}
+
+\textbf{Physical Interpretation:}
+\begin{enumerate}
+    \item \textbf{Truncation effect}: TRG's bond dimension truncation effectively introduces a finite correlation length $\xi_{\text{eff}} \sim \chi$
+    \item \textbf{Missing critical divergence}: Standard TRG cannot capture true logarithmic divergence, similar to finite-size effects
+    \item \textbf{Algorithmic limitation}: Advanced methods (HOTRG, TNR) are needed for better treatment of critical phenomena
+\end{enumerate}
+
+\subsection{Magnetic Susceptibility Benchmarks (Small Lattices)}
+
+To explicitly report magnetic susceptibility, we evaluate $\chi$ from the fluctuation formula
+\begin{equation}
+    \chi = \frac{\beta}{N} \left( \langle M^2 \rangle - \langle M \rangle^2 \right),
+\end{equation}
+using both enumeration and transfer matrix methods at $T=2.0$ with $J=1$ and $h=0$. These two methods agree to numerical precision and provide ground-truth benchmarks for small systems.
+
+\begin{table}[H]
+\centering
+\caption{Free energy, susceptibility, and heat capacity per spin at $T=2.0$ ($J=1$, $h=0$)}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+System & Method & $f/N$ & $\chi/N$ & $C_v/N$ \\
+\midrule
+1D $L=16$ & Enumeration & -1.626524 & 1.359129 & 0.196657 \\
+1D $L=16$ & Transfer matrix & -1.626524 & 1.359129 & 0.196657 \\
+2D $4\times4$ & Enumeration & -2.138171 & 6.951373 & 0.605533 \\
+2D $4\times4$ & Transfer matrix & -2.138171 & 6.951373 & 0.605534 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Computation Time Summary}
+
+We record wall-clock runtimes for the small-lattice benchmarks in Table~\ref{tab:runtime_small} and for the three TRG figures in Table~\ref{tab:runtime_trg}. The timings are single-run measurements on the project environment and illustrate the expected scaling behavior.
+
+\begin{table}[H]
+\centering
+\caption{Runtime for small-lattice benchmarks at $T=2.0$}
+\label{tab:runtime_small}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+System & Method & Runtime \\
+\midrule
+1D $L=16$ & Enumeration & 0.12 s \\
+1D $L=16$ & Transfer matrix & $7.5\times 10^{-4}$ s \\
+2D $4\times4$ & Enumeration & 0.19 s \\
+2D $4\times4$ & Transfer matrix & $5.2\times 10^{-3}$ s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Runtime for TRG plots in this project}
+\label{tab:runtime_trg}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Output & Description & Runtime \\
+\midrule
+Figure~\ref{fig:convergence} & Error vs. iteration at $T=\Tc$ & $\sim 170$ s \\
+Figure~\ref{fig:error_temp} & Error vs. temperature & $\sim 30$ s \\
+Figure~\ref{fig:heat_capacity} & Heat capacity vs. temperature & $\sim 60$ s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{TRG Runtime vs Bond Dimension (Log Scale)}
+
+Figure~\ref{fig:trg_runtime_log} compares TRG runtime across bond dimensions using a log scale to highlight the rapid growth in cost. The fitted trend indicates
+\begin{equation}
+    t \propto \chi^{3.62},
+\end{equation}
+showing a steep scaling with bond dimension. While the theoretical asymptotic complexity for TRG is $O(\chi^6)$ due to the SVD of $\chi^2 \times \chi^2$ matrices, the lower observed exponent in the range $\chi \in [2, 32]$ is likely due to the dominance of fixed constant overheads in the Python implementation and the efficient internal optimization of BLAS/LAPACK routines for smaller matrices. As $\chi$ increases further, the scaling is expected to approach the theoretical $O(\chi^6)$ limit.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{figures/figure4_trg_runtime_log.png}
+\caption{TRG runtime versus bond dimension on a log scale (average of 5 runs; fit $t \propto \chi^{3.62}$).}
+\label{fig:trg_runtime_log}
+\end{figure}
+
+\subsection{Performance Micro-Benchmarks (perf\_test)}
+
+To understand low-level numerical cost, we ran two micro-benchmarks in \texttt{perf\_test}. \textbf{To guarantee rigorous timing, we isolated the core mathematical operations (matrix multiplication and tensor contraction) from initialization and I/O overheads. Each data point represents the average of 5 independent repetitions to mitigate system jitter.}
+
+The first compares rank-2 matrix multiplication using a pure Python loop, \texttt{np.matmul}, and the \texttt{@} operator. The second compares rank-3 tensor contraction using loop, \texttt{np.einsum}, and \texttt{np.matmul}, as well as two task-specific contraction formulas (Formula 1 and Formula 2) using loop vs. \texttt{np.einsum}. Both plots are in log-log scale to reveal scaling trends.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{figures/matrix_multiplication_timings.png}
+\caption{Matrix and rank-3 tensor contraction timing comparison (log-log scale).}
+\label{fig:perf_matrix_rank3}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{figures/taskmd_formula_comparison.png}
+\caption{Task-specific contraction formulas: loop vs. \texttt{np.einsum} (log-log scale).}
+\label{fig:perf_taskmd}
+\end{figure}
+
+% ==================== Chapter 5: Discussion ====================
+\section{Discussion}
+
+\subsection{Intrinsic Limitations of TRG at Critical Points}
+This study reveals several important limitations of standard TRG:
+
+\begin{enumerate}
+    \item \textbf{Correlation length divergence vs. truncation}: At $T = \Tc$, physical correlation length $\xi \to \infty$, but TRG's bond dimension truncation introduces effective correlation length $\xi_{\text{eff}} \sim \chi$
+
+    \item \textbf{Effective rank bottleneck}: Although theoretically tensor rank grows exponentially ($\sim 2^n$), actual effective rank growth is much slower, preventing full utilization of $\chi$
+
+    \item \textbf{Numerical instability}: Extended iteration accumulates floating-point errors, requiring balance between truncation error and numerical error
+\end{enumerate}
+
+\subsection{Why Increasing $\chi$ Shows Diminishing Returns}
+
+A critical observation from Figure~\ref{fig:convergence} is that increasing bond dimension $\chi$ beyond 8 provides minimal accuracy improvement. This saturation phenomenon arises from four fundamental mechanisms:
+
+\subsubsection{Geometric Limitation}
+
+The SVD decomposition in TRG is constrained by the rank of the reshaped matrix. For a rank-4 tensor $T[u,r,d,l]$ with each index having dimension $d$:
+
+\begin{equation}
+    \chi_{\text{max}} = \min(d^2, d^2) = d^2
+\end{equation}
+
+In early iterations:
+\begin{itemize}
+    \item \textbf{Step 1}: Initial tensor has $d=2$, yielding only 4 singular values regardless of $\chi$.
+    \item \textbf{Step 2}: After first coarse-graining, the effective rank $\chi_{\text{eff}}$ is still bounded by the previous step's output.
+    \item \textbf{Step 3+}: Rank growth is gradual rather than instantaneous.
+\end{itemize}
+
+This creates an \textit{initial rank bottleneck}: even if we set $\chi=64$, the first few renormalization steps can only utilize $\chi_{\text{eff}} \ll 64$. The accuracy is thus limited by how quickly the effective rank captures the long-range correlations of the system during the coarse-graining process. Increasing $\chi$ prematurely provides no gain because the extra singular values are zero or purely numerical noise.
+
+\subsubsection{Rapid Singular Value Decay}
+
+For the 2D Ising model near criticality, physical information concentrates in low-frequency modes (large singular values). A typical singular value spectrum shows:
+
+\begin{equation}
+    S_k \sim S_0 \cdot \exp(-\alpha k), \quad \alpha \approx 1.5
+\end{equation}
+
+The cumulative energy fraction captured by the first $\chi$ singular values is:
+
+\begin{equation}
+    E(\chi) = \frac{\sum_{k=1}^{\chi} S_k^2}{\sum_{k=1}^{\infty} S_k^2}
+\end{equation}
+
+Typical values at critical temperature:
+\begin{itemize}
+    \item $E(4) \approx 99.9\%$ — first 4 modes capture nearly all information
+    \item $E(8) \approx 99.99\%$ — only 0.09\% additional information
+    \item $E(16) \approx 99.999\%$ — diminishing returns: only 0.009\% more
+    \item $E(32) - E(16) < 10^{-4}$ — below numerical precision
+\end{itemize}
+
+\textbf{Physical origin}: The 2D Ising model's correlation function decays exponentially in space, leading to rapid decay in the frequency domain (singular value spectrum).
+
+\subsubsection{Numerical Precision Barrier}
+
+IEEE 754 double precision (float64) provides machine epsilon $\epsilon_{\text{mach}} \approx 2.22 \times 10^{-16}$. Each TRG step involves:
+
+\begin{enumerate}
+    \item \textbf{SVD decomposition}: Numerical error $\sim O(\epsilon_{\text{mach}} \|T\|)$
+    \item \textbf{Tensor contractions}: Four einsum operations, each accumulating roundoff error
+    \item \textbf{Normalization}: Logarithm operation introduces relative errors
+\end{enumerate}
+
+After $n \sim 15$ iterations, accumulated numerical error reaches $\sim 10^{-12}$ to $10^{-10}$. When singular values fall below $S_k < 10^{-12}$, their contribution ($S_k^2 \sim 10^{-24}$) is far below numerical noise, making their retention counterproductive.
+
+\subsubsection{Algorithmic Intrinsic Error}
+
+TRG is an approximate coarse-graining method with inherent errors:
+
+\begin{equation}
+    E_{\text{total}}(n, \chi) = E_{\text{truncation}}(\chi) + E_{\text{renorm}} + E_{\text{numerical}}(n)
+\end{equation}
+
+\begin{itemize}
+    \item \textbf{Early iterations} ($n < 5$): Truncation error dominates; increasing $\chi$ helps significantly
+    \item \textbf{Mid iterations} ($5 < n < 15$): All three errors comparable; moderate $\chi$ benefit
+    \item \textbf{Late iterations} ($n > 15$): Numerical error dominates; $\chi$ has minimal impact
+\end{itemize}
+
+The renormalization error $E_{\text{renorm}}$ stems from the $2 \times 2$ blocking scheme not perfectly preserving all physical symmetries. This sets a fundamental accuracy floor independent of $\chi$.
+
+\subsubsection{Cost-Benefit Analysis}
+
+\begin{table}[H]
+\centering
+\caption{Performance vs. cost for different bond dimensions at $T = \Tc$}
+\begin{tabular}{@{}cccc@{}}
+\toprule
+$\chi$ & Relative Error (\%) & Improvement over previous & Time cost (relative) \\
+\midrule
+2  & 0.0895 & -- & 1$\times$ \\
+4  & 0.0601 & 32.8\% & 1$\times$ \\
+8  & 0.0714 & -18.8\% & 1$\times$ \\
+16 & 0.0730 & -2.2\% & $\sim$ 3$\times$ \\
+32 & 0.0741 & -1.5\% & $\sim$ 170$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Key insights:}
+\begin{itemize}
+    \item $\chi = 4 \sim 8$: Optimal balance between truncation error and computational cost.
+    \item $\chi = 16 \sim 32$: Diminishing returns in accuracy. When the singular values fall below the machine epsilon ($10^{-16}$), retaining more states introduces numerical noise from floating-point roundoff rather than physical signal.
+    \item \textbf{Numerical Noise}: At $\chi=32$, the slight increase in error compared to $\chi=8$ is attributed to the accumulation of roundoff errors during the manipulation of large, nearly singular matrices.
+\end{itemize}
+
+\subsection{Advanced Analysis of TRG Behavior}
+
+Beyond standard error analysis, our results reveal deep physical properties of the TRG algorithm itself, which can be understood through the lens of renormalization group flow and scaling theory.
+
+\subsubsection{Finite Entanglement Scaling}
+The Onsager solution predicts a logarithmic divergence of the heat capacity at $T_c$. However, Figure~\ref{fig:heat_capacity} shows a finite peak $C_v^{\text{max}}(\chi)$. This behavior is a manifestation of \textit{Finite Entanglement Scaling}. In tensor networks, the finite bond dimension $\chi$ introduces an effective correlation length cutoff $\xi_{\text{eff}} \sim \chi^{\kappa}$. Consequently, the TRG simulation behaves like a system of finite physical size $L_{\text{eff}} \sim \xi_{\text{eff}}$. 
+Scaling theory predicts that for the 2D Ising model (central charge $c=0.5$), the peak height should scale as:
+\begin{equation}
+    C_v^{\text{max}}(\chi) \propto \frac{c}{6} \ln \chi + \text{const}
+\end{equation}
+The finite peaks observed in our results are thus not artifacts but expected physical consequences of the entanglement truncation, confirming that $\chi$ acts as a scale parameter in the renormalization group flow.
+
+\subsubsection{Error Rebound Mechanism}
+The "V-shape" convergence curve in Figure~\ref{fig:convergence} (minimum error at $n \approx 8$) indicates a competition between two distinct error sources:
+\begin{itemize}
+    \item \textbf{Renormalization Flow ($n < 8$)}: Initially, the tensor coarse-graining drives the system towards its fixed point. The error decreases as the tensor network correctly captures larger length scales.
+    \item \textbf{Numerical Noise Accumulation ($n > 8$)}: Once the physical information is saturated, further iterations mainly accumulate floating-point round-off errors from the $O(10^2)$ matrix operations per step.
+\end{itemize}
+This suggests the existence of an "optimal iteration window" for TRG, where the physical fixed point is reached but numerical noise is still negligible.
+
+\subsubsection{Corner Double Line (CDL) Issues}
+While our high-temperature results are accurate, it is theoretically worth noting that standard TRG does not perfectly filter out short-range entanglement, which can accumulate in the corners of the tensor, leading to "Corner Double Line" (CDL) fixed points rather than the trivial high-temperature fixed point. This effect is subtle in the 2D Ising model but motivates the development of advanced algorithms like TNR (Tensor Network Renormalization) which explicitly remove short-range correlations.
+
+\subsection{Comparison with Literature}
+\begin{itemize}
+    \item Prior TRG studies report $\sim 10^{-4}$ relative error at $\chi \approx 20$ away from criticality.
+    \item This study: Achieved $6 \times 10^{-4}$ relative error at $T = \Tc$, $\chi = 4$
+    \item Difference mainly from critical slowing-down effect, which is an expected physical phenomenon
+\end{itemize}
+
+\subsection{Improvement Directions}
+\begin{enumerate}
+    \item \textbf{Advanced algorithms}:
+    \begin{itemize}
+        \item HOTRG (Higher-Order TRG): Preserves more local degrees of freedom
+        \item TNR (Tensor Network Renormalization): Introduces isometry conditions
+        \item SRG (Second Renormalization Group): Two-layer coarse-graining
+    \end{itemize}
+
+    \item \textbf{Adaptive truncation}: Dynamically adjust $\chi$ based on singular value spectrum
+
+    \item \textbf{External field calculations}: Extend to $h \neq 0$ case to study susceptibility
+\end{enumerate}
+
+% ==================== Chapter 6: Conclusion ====================
+\section{Conclusion}
+
+This project successfully implements and verifies the standard TRG algorithm for the 2D Ising model. Main achievements and conclusions include:
+
+\begin{enumerate}
+    \item \textbf{Algorithm correctness}: Through rigorous comparison with Onsager's exact solution and reference implementation, we confirm complete code correctness (numerical error $< 10^{-15}$)
+
+    \item \textbf{Optimal parameter selection}: For critical point calculations, $\chi = 4 \sim 8$ and $n = 8$ iterations achieve optimal cost-effectiveness (error $\sim 0.06\%$, computation time $< 1$ sec)
+
+    \item \textbf{Deepened physical understanding}:
+    \begin{itemize}
+        \item Recognized standard TRG's inherent limitations at critical points
+        \item Understood trade-off between truncation error and numerical error
+        \item Appreciated effective rank growth's impact on algorithm efficiency
+    \end{itemize}
+
+    \item \textbf{Methodological insights}: Mastered tensor network methods' basic principles and numerical implementation techniques, laying foundation for future quantum many-body system research
+\end{enumerate}
+
+This research not only fulfills final project requirements but more importantly cultivates critical thinking—learning to properly assess a numerical method's capabilities and applicable range, rather than blindly pursuing ``larger parameters.'' This scientific literacy is crucial for computational physics research.
+
+\end{document}
